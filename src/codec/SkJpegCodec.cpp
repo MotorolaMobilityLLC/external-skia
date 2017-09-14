@@ -1067,7 +1067,7 @@ SkCodec::Result SkJpegCodec::onGetPixels(const SkImageInfo& dstInfo,
         return kUnimplemented;
     }
     if (dstInfo.width() >= 200 && dstInfo.height() >= 200)
-        SkCodecPrintf("SkJpegCodec::onGetPixels flag:%d ,+ ",this->getPostProcFlag());
+        SkCodecPrintf("SkJpegCodec::onGetPixels + ");
 
 #if defined(MTK_JPEG_HW_DECODER)
     char value[PROPERTY_VALUE_MAX];
