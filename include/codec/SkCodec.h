@@ -650,6 +650,10 @@ public:
         return this->onGetRepetitionCount();
     }
 
+#ifdef MTK_IMAGE_ENABLE_PQ_FOR_JPEG
+int getPostProcFlag() const { return fPostProc; }
+void setPostProcFlag(int flag) { fPostProc = flag;}
+#endif
 protected:
     /**
      *  Takes ownership of SkStream*
@@ -819,6 +823,9 @@ private:
     // Only meaningful during scanline decodes.
     int                                fCurrScanline;
 
+#ifdef MTK_IMAGE_ENABLE_PQ_FOR_JPEG
+    int                     fPostProc;
+#endif
     bool                               fStartedIncrementalDecode;
 #ifdef SK_DEBUG
     bool                               fUnsupportedICC = false;

@@ -258,6 +258,11 @@ public:
         return this->getAndroidPixels(info, pixels, rowBytes);
     }
 
+    #ifdef MTK_IMAGE_ENABLE_PQ_FOR_JPEG
+    void setPostProcFlag(int flag) {
+        codec()->setPostProcFlag(flag);
+    }
+    #endif
 protected:
 
     SkAndroidCodec(SkCodec*);

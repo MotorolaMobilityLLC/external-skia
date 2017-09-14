@@ -31,6 +31,9 @@ public:
     bool conversionSupported(SkColorType colorType) override;
 
     SkEncodedImageFormat getEncodedFormat() override { return fCodec->getEncodedFormat(); }
+    #ifdef MTK_IMAGE_ENABLE_PQ_FOR_JPEG
+    void setPostProcFlag(int flag) override { fCodec->setPostProcFlag(flag);}
+    #endif
 
     SkColorType computeOutputColorType(SkColorType requestedColorType) override {
         return fCodec->computeOutputColorType(requestedColorType);
@@ -44,6 +47,7 @@ public:
 private:
 
     std::unique_ptr<SkAndroidCodec> fCodec;
+    int                           fPostProc;
 
     typedef SkBitmapRegionDecoder INHERITED;
 

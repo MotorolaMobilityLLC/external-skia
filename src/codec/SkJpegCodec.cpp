@@ -20,6 +20,468 @@
 #include <stdio.h>
 #include "SkJpegUtility.h"
 
+#if defined(MTK_JPEG_HW_DECODER) || defined(MTK_JPEG_HW_REGION_RESIZER)
+  #if defined(MTK_JPEG_HW_DECODER)
+  #include "mhal/MediaHal.h"
+  #endif
+  #if defined(MTK_JPEG_HW_REGION_RESIZER)
+  #include "DpBlitStream.h"
+  #endif
+#include <cutils/properties.h>
+#include <cutils/log.h>
+#undef LOG_TAG
+#define LOG_TAG "skia"
+#define MAX_APP1_HEADER_SIZE 8 * 1024
+#define TO_CEIL(x,a) ( ( (unsigned long)(x) + ((a)-1)) & ~((a)-1) )
+void* allocateIONBuffer(int ionClientHnd, ion_user_handle_t *ionAllocHnd, int *bufferFD, size_t size)
+{
+    int ret;
+    void *bufAddr = 0;
+    ret = ion_alloc(ionClientHnd, size, 0, ION_HEAP_MULTIMEDIA_MASK, ION_FLAG_CACHED | ION_FLAG_CACHED_NEEDS_SYNC, ionAllocHnd);
+    if (ret)
+    {
+         SkCodecPrintf("allocateIONBuffer ion_alloc failed (%d, %d, %d)\n", ionClientHnd, size, *ionAllocHnd);
+         return 0;
+    }
+    ret = ion_share(ionClientHnd, *ionAllocHnd, bufferFD);
+    if (ret)
+    {
+        SkCodecPrintf("allocateIONBuffer ion_share failed (%d, %d, %d)\n", ionClientHnd, *ionAllocHnd, *bufferFD);
+        ion_free(ionClientHnd, *ionAllocHnd);
+        return 0;
+    }
+    bufAddr = ion_mmap(ionClientHnd, 0, size, PROT_READ | PROT_WRITE, MAP_SHARED, *bufferFD, 0);
+    if (bufAddr == MAP_FAILED)
+    {
+        SkCodecPrintf("allocateIONBuffer ion_mmap failed (%d, %d, %d)\n", ionClientHnd, size, *bufferFD);
+        ion_share_close(ionClientHnd, *bufferFD);
+        ion_free(ionClientHnd, *ionAllocHnd);
+        return 0;
+    }
+#if 0
+    IonBufferInfo *info = (IonBufferInfo*)malloc(sizeof(IonBufferInfo));
+    bool res;
+    info->ionClientHnd = ionClientHnd;
+    info->ionAllocHnd = *ionAllocHnd;
+    info->size = bm->getSize();
+    info->addr = dstBuffer;
+    res = bm->installPixels(bm->info(), dstBuffer, bm->rowBytes(), NULL,
+            onReleaseIONBuffer, (void *)info);
+    if (res == false)
+        SkCodecPrintf("onDecodeHW installPixels failed: (%d, %d, %p, %d)\n", info->ionClientHnd, info->ionAllocHnd, info->addr, info->size);
+#endif
+    return bufAddr;
+}
+void freeIONBuffer(int ionClientHnd, ion_user_handle_t ionAllocHnd, void* bufferAddr, int bufferFD, size_t size)
+{
+    if(bufferAddr != NULL)
+    {
+        int ret = ion_munmap(ionClientHnd, bufferAddr, size);
+        if (ret < 0)
+            SkCodecPrintf("onDecodeHW ion_munmap failed (%d, %p, %d)\n", ionClientHnd, bufferAddr, size);
+    }
+    if (bufferFD != -1)
+    {
+        if (ion_share_close(ionClientHnd, bufferFD))
+        {
+            SkCodecPrintf("onDecodeHW ion_share_close failed (%d, %d)\n", ionClientHnd, bufferFD);
+        }
+    }
+    if (ion_free(ionClientHnd, ionAllocHnd))
+    {
+        SkCodecPrintf("onDecodeHW ion_free failed (%d, %d)\n", ionClientHnd, ionAllocHnd);
+    }
+}
+unsigned int getISOSpeedRatings(void *buffer, unsigned int size)
+{
+    unsigned char *bufPtr = (unsigned char *)buffer;
+    unsigned char *TIFFPtr;
+    int bytesLeft = size;
+    bool findAPP1Marker = false;
+    bool findTIFFHeader = false;
+    bool isIntelAlign = true;
+    bool findEXIFOffset = false;
+    bool findISOSpeedRatings = false;
+    unsigned int APP1Length;
+    unsigned int IFDOffset;
+    unsigned int EXIFOffset;
+    unsigned int nextIFDOffset;
+    while(bytesLeft > 0)
+    {
+        if ((0xFF == *bufPtr) && (0xE1 == *(bufPtr + 1)))
+        {
+            findAPP1Marker = true;
+            break;
+        }
+        bufPtr++;
+        bytesLeft--;
+    }
+    if (findAPP1Marker == true && bytesLeft >= 4)
+    {
+        APP1Length = (*(bufPtr + 2) << 8) + *(bufPtr + 3);
+        if (bytesLeft > (int)APP1Length)
+            bytesLeft = (int)APP1Length;
+    }
+    else
+        return 0;
+    while(bytesLeft >= 4)
+    {
+        if (((0x49 == *bufPtr) && (0x49 == *(bufPtr + 1)) &&
+            (0x2a == *(bufPtr + 2)) && (0x00 == *(bufPtr + 3))))
+        {
+            findTIFFHeader = true;
+            break;
+        }
+        else if (((0x4d == *bufPtr) && (0x4d == *(bufPtr + 1)) &&
+            (0x00 == *(bufPtr + 2)) && (0x2a == *(bufPtr + 3))))
+        {
+            findTIFFHeader = true;
+            isIntelAlign = false;
+            break;
+        }
+        bufPtr++;
+        bytesLeft--;
+    }
+    if (findTIFFHeader == true && bytesLeft >= 8)
+    {
+        TIFFPtr = bufPtr;
+        if (isIntelAlign == true)
+            IFDOffset = (*(bufPtr + 7) << 24) + (*(bufPtr + 6) << 16)
+                               + (*(bufPtr + 5) << 8) + *(bufPtr + 4);
+        else
+            IFDOffset = (*(bufPtr + 4) << 24) + (*(bufPtr + 5) << 16)
+                        + (*(bufPtr + 6) << 8) + *(bufPtr + 7);
+        if (bytesLeft >= (int)IFDOffset)
+        {
+            bufPtr += IFDOffset;
+            bytesLeft -= IFDOffset;
+        }
+        else
+            return 0;
+    }
+    else
+        return 0;
+    while(findEXIFOffset == false && bytesLeft >= 2)
+    {
+        unsigned int dirEntries;
+        if (isIntelAlign == true)
+            dirEntries = (*(bufPtr + 1) << 8) + *bufPtr;
+        else
+            dirEntries = (*bufPtr << 8) + *(bufPtr + 1);
+        bufPtr += 2;
+        bytesLeft -= 2;
+        while(dirEntries > 0 && bytesLeft >= 12)
+        {
+            if ((isIntelAlign == true && (0x69 == *bufPtr) && (0x87 == *(bufPtr + 1))) ||
+                 (isIntelAlign == false && (0x87 == *bufPtr) && (0x69 == *(bufPtr + 1))))
+            {
+                if (isIntelAlign == true)
+                    EXIFOffset = (*(bufPtr + 11) << 24) + (*(bufPtr + 10) << 16)
+                                        + (*(bufPtr + 9) << 8) + *(bufPtr + 8);
+                else
+                    EXIFOffset = (*(bufPtr + 8) << 24) + (*(bufPtr + 9) << 16)
+                                 + (*(bufPtr + 10) << 8) + *(bufPtr + 11);
+                if (EXIFOffset - ((unsigned long)bufPtr - (unsigned long)TIFFPtr) > bytesLeft) // EXIFOffset is invalid, ignore the next step
+                    return 0;
+                unsigned char *EXIFPtr = TIFFPtr + EXIFOffset;
+                bytesLeft -= (unsigned long)EXIFPtr - (unsigned long)bufPtr;
+                if (bytesLeft > 0)
+                {
+                    bufPtr = EXIFPtr;
+                    findEXIFOffset = true;
+                    break;
+                }
+                else
+                    return 0;
+            }
+            dirEntries--;
+            bufPtr += 12;
+            bytesLeft -= 12;
+        }
+        if (dirEntries == 0 && findEXIFOffset == false && bytesLeft >= 4)
+        {
+            if (isIntelAlign == true)
+                nextIFDOffset = (*(bufPtr + 3) << 24) + (*(bufPtr + 2) << 16)
+                                        + (*(bufPtr + 1) << 8) + *(bufPtr);
+            else
+                nextIFDOffset = (*(bufPtr) << 24) + (*(bufPtr + 1) << 16)
+                                + (*(bufPtr + 2) << 8) + *(bufPtr + 3);
+            if (nextIFDOffset == 0)
+                return 0;
+            unsigned char *nextIFDPtr = TIFFPtr + nextIFDOffset;
+            bytesLeft -= (unsigned long)nextIFDPtr - (unsigned long)bufPtr;
+            if (bytesLeft > 0)
+                bufPtr = nextIFDPtr;
+            else
+                return 0;
+        }
+    }
+    if (findEXIFOffset == true && bytesLeft >= 12)
+    {
+        unsigned int ISOSpeedRatings;
+        unsigned int dirEntries;
+        if (isIntelAlign == true)
+            dirEntries = (*(bufPtr + 1) << 8) + *bufPtr;
+        else
+            dirEntries = (*bufPtr << 8) + *(bufPtr + 1);
+        bufPtr += 2;
+        bytesLeft -= 2;
+        while(dirEntries > 0 && bytesLeft >= 2)
+        {
+            if ((isIntelAlign == true && (0x27 == *bufPtr) && (0x88 == *(bufPtr + 1))) ||
+                (isIntelAlign == false && (0x88 == *bufPtr) && (0x27 == *(bufPtr + 1))))
+            {
+                if (isIntelAlign == true)
+                ISOSpeedRatings = (*(bufPtr + 9) << 8) + *(bufPtr + 8);
+                else
+                    ISOSpeedRatings = (*(bufPtr + 8) << 8) + *(bufPtr + 9);
+                findISOSpeedRatings = true;
+                break;
+            }
+            dirEntries--;
+            bufPtr += 12;
+            bytesLeft -= 12;
+        }
+        if (findISOSpeedRatings == true)
+            return ISOSpeedRatings;
+        else
+            return 0;
+    }
+    else
+        return 0;
+}
+#if defined(MTK_JPEG_HW_DECODER)
+static bool onDecodeParser(unsigned char* srcBuffer, unsigned int srcSize, void** jpegDecHandle)
+{
+    int width, height;
+    MHAL_JPEG_DEC_SRC_IN    srcInfo;
+    *jpegDecHandle = srcInfo.jpgDecHandle = NULL;
+    int result ;
+    int try_times = 0;
+    srcInfo.srcBuffer = srcBuffer;
+    srcInfo.srcLength = srcSize;
+    srcInfo.srcFD = 0x0;
+    do
+    {
+        try_times++;
+        result = mHalJpeg(MHAL_IOCTL_JPEG_DEC_PARSER, (void *)&srcInfo, sizeof(srcInfo), NULL, 0, NULL);
+        if(result == MHAL_INVALID_RESOURCE && try_times < 5)
+        {
+            SkCodecPrintf("onDecodeParser: HW busy ! Sleep 10ms & try again");
+            usleep(10 * 1000);
+        }
+        else if (MHAL_NO_ERROR != result)
+        {
+            return false;
+        }
+    } while(result == MHAL_INVALID_RESOURCE && try_times < 5);
+    *jpegDecHandle = srcInfo.jpgDecHandle ;
+    return true;
+}
+bool onDecodeHW(void* srcBuffer, int ionClientHnd, unsigned int srcBufSize, unsigned int srcStreamSize,
+                      int srcFD, void* dstBuffer, int width, int height, int rowBytes, SkColorType colorType,
+                      void* jpegDecHandle, int tdsp, void* pPPParam, unsigned int ISOSpeed)
+{
+    MHAL_JPEG_DEC_START_IN inParams;
+    memset(&inParams, 0,sizeof(MHAL_JPEG_DEC_START_IN));
+    unsigned int enTdshp = 0x1;
+    switch (colorType)
+    {
+        case kRGBA_8888_SkColorType:
+            inParams.dstFormat = JPEG_OUT_FORMAT_ARGB8888;
+            break;
+        case kRGB_565_SkColorType:
+            inParams.dstFormat = JPEG_OUT_FORMAT_RGB565;
+            break;
+        default:
+            inParams.dstFormat = JPEG_OUT_FORMAT_ARGB8888;
+            break;
+    }
+    ion_user_handle_t ionAllocHnd;
+    int     dstFD = -1;
+    void*   dstTmpBuffer = NULL;
+    if (srcFD >= 0)
+    {
+        dstTmpBuffer = allocateIONBuffer(ionClientHnd, &ionAllocHnd, &dstFD, rowBytes * height);
+        SkDebugf("onDecodeHW allocateIONBuffer src:(%d), dst:(%d, %d, %d, %d, %p)",
+                srcFD, ionClientHnd, ionAllocHnd, dstFD, rowBytes * height, dstTmpBuffer);
+    }
+    inParams.srcBuffer = (unsigned char*)srcBuffer;
+    inParams.srcBufSize = srcBufSize ;
+    inParams.srcLength= srcStreamSize;
+    inParams.srcFD = srcFD;
+    inParams.dstWidth = width;
+    inParams.dstHeight = height;
+    inParams.dstPhysAddr = NULL;
+    inParams.dstFD = dstFD;
+    if (dstTmpBuffer != NULL && dstFD >= 0)
+        inParams.dstVirAddr = (UINT8*) dstTmpBuffer;
+    else
+        inParams.dstVirAddr = (UINT8*) dstBuffer;
+    inParams.doDithering = 0;
+    inParams.doRangeDecode = 0;
+    inParams.doPostProcessing = 0;
+    inParams.doPostProcessing = enTdshp;
+    inParams.postProcessingParam = (MHAL_JPEG_POST_PROC_PARAM*)malloc(sizeof(MHAL_JPEG_POST_PROC_PARAM));
+#ifdef MTK_IMAGE_DC_SUPPORT
+    inParams.postProcessingParam->imageDCParam = this->getDynamicCon();
+#else
+    inParams.postProcessingParam->imageDCParam = NULL;
+#endif
+    inParams.postProcessingParam->ISOSpeedRatings = ISOSpeed;
+    inParams.PreferQualityOverSpeed = 0;
+    inParams.jpgDecHandle = jpegDecHandle ;
+    if (MHAL_NO_ERROR != mHalJpeg(MHAL_IOCTL_JPEG_DEC_START,
+                                   (void *)&inParams, sizeof(inParams),
+                                   NULL, 0, NULL))
+    {
+        if (dstTmpBuffer != NULL)
+        {
+            memcpy(dstBuffer, dstTmpBuffer, rowBytes * height);
+            freeIONBuffer(ionClientHnd, ionAllocHnd, dstTmpBuffer, dstFD, rowBytes * height);
+        }
+        ALOGW("JPEG HW Decoder return Fail!!\n");
+        free(inParams.postProcessingParam);
+        return false;
+    }
+    if (dstTmpBuffer != NULL)
+    {
+        memcpy(dstBuffer, dstTmpBuffer, rowBytes * height);
+        freeIONBuffer(ionClientHnd, ionAllocHnd, dstTmpBuffer, dstFD, rowBytes * height);
+    }
+    free(inParams.postProcessingParam);
+    return true;
+}
+bool getEOImarker(unsigned char* start, unsigned char* end, unsigned int *bs_offset)
+{
+    unsigned int eoi_flag = 0;
+    unsigned char* bs_tail ;
+    if((start+1 >= end) || start == NULL || end == NULL)
+    {
+        ALOGW("SkiaJpeg:getEOImarker find no EOI [%p %p], L:%d!! \n", start, end, __LINE__);
+        return false ;
+    }
+    bs_tail = start+1;
+    for( ;bs_tail < end ; bs_tail++)
+    {
+        if( (*(uint8_t*)(bs_tail-1) == 0xFF) && (*(uint8_t*)(bs_tail) == 0xD9) )
+        {
+            *bs_offset = bs_tail - start ;
+            eoi_flag = 1;
+        }
+    }
+    if(eoi_flag == 0)
+    {
+        ALOGW("SkiaJpeg:getEOImarker find no EOI [%p %p], L:%d!! \n", start, end, __LINE__);
+        return false ;
+    }
+    else
+        return true ;
+}
+#endif
+#if defined(MTK_JPEG_HW_REGION_RESIZER)
+bool ImgPostProc(void* src, int ionClientHnd, int srcFD, void* dst, int width, int height, int rowBytes,
+                     SkColorType colorType, int tdsp, void* pPPParam, unsigned int ISOSpeed)
+{
+    if(NULL == dst)
+    {
+        SkCodecPrintf("ImgPostProc : null pixels");
+        return false;
+    }
+    if((colorType == kRGBA_8888_SkColorType) ||
+       (colorType == kRGB_565_SkColorType))
+    {
+        DpBlitStream bltStream;
+        void* src_addr[3];
+        unsigned int src_size[3];
+        unsigned int plane_num = 1;
+        DpColorFormat dp_out_fmt ;
+        DpColorFormat dp_in_fmt ;
+        unsigned int src_pByte = 4;
+        src_addr[0] = src ;
+        DP_STATUS_ENUM rst ;
+        switch(colorType)
+        {
+            case kRGBA_8888_SkColorType:
+                dp_out_fmt = eRGBX8888;
+                src_pByte = 4;
+                break;
+            case kRGB_565_SkColorType:
+                dp_out_fmt = eRGB565;
+                src_pByte = 2;
+                break;
+            default :
+                SkCodecPrintf("ImgPostProc : invalid bitmap config %d!!\n", colorType);
+                return false;
+        }
+        dp_in_fmt = dp_out_fmt ;
+        src_size[0] = rowBytes * height;
+        SkCodecPrintf("ImgPostProc: wh (%d %d)->(%d %d), fmt %d, size %d->%d, regionPQ %d!!\n", width, height, width, height
+        , colorType, src_size[0], src_size[0], tdsp);
+        DpPqParam pqParam;
+        uint32_t* pParam = &pqParam.u.image.info[0];
+        pqParam.enable = (tdsp == 0)? false:true;
+        pqParam.scenario = MEDIA_PICTURE;
+        pqParam.u.image.iso = ISOSpeed;
+        if (pPPParam)
+        {
+            SkCodecPrintf("ImgPostProc: enable imgDc pParam %p", pPPParam);
+            pqParam.u.image.withHist = true;
+            memcpy((void*)pParam, pPPParam, 20 * sizeof(uint32_t));
+        }
+        else
+            pqParam.u.image.withHist = false;
+        bltStream.setPQParameter(pqParam);
+        if (srcFD >= 0)
+            bltStream.setSrcBuffer(srcFD, src_size, plane_num);
+        else
+            bltStream.setSrcBuffer((void**)src_addr, src_size, plane_num);
+        DpRect src_roi;
+        src_roi.x = 0;
+        src_roi.y = 0;
+        src_roi.w = width;
+        src_roi.h = height;
+        bltStream.setSrcConfig(width, height, rowBytes, 0, dp_in_fmt, DP_PROFILE_JPEG);
+        ion_user_handle_t ionAllocHnd;
+        int dstFD;
+        void* dstBuffer = NULL;
+        if (srcFD >= 0)
+        {
+            uint dst_size[1];
+            dst_size[0] = src_size[0];
+            dstBuffer = allocateIONBuffer(ionClientHnd, &ionAllocHnd, &dstFD, dst_size[0]);
+            SkCodecPrintf("ImgPostProc allocateIONBuffer src:(%d), dst:(%d, %d, %d, %d, %p)",
+                    srcFD, ionClientHnd, ionAllocHnd, dstFD, dst_size[0], dstBuffer);
+            bltStream.setDstBuffer(dstFD, dst_size, 1 );
+        }
+        else
+            bltStream.setDstBuffer(dst, src_size[0] );
+        DpRect dst_roi;
+        dst_roi.x = 0;
+        dst_roi.y = 0;
+        dst_roi.w = width;
+        dst_roi.h = height;
+        bltStream.setDstConfig(width, height, rowBytes, 0, dp_out_fmt, DP_PROFILE_JPEG);
+        rst = bltStream.invalidate() ;
+        if (dstBuffer != NULL)
+        {
+            memcpy(dst, dstBuffer, src_size[0]);
+            freeIONBuffer(ionClientHnd, ionAllocHnd, dstBuffer, dstFD, src_size[0]);
+        }
+        if ( rst < 0)
+        {
+            SkCodecPrintf("ImgPostProc: DpBlitStream invalidate failed, L:%d!!\n", __LINE__);
+            return false;
+        }
+        else
+        {
+            return true ;
+        }
+    }
+    return false;
+}
+#endif
+#endif
 // This warning triggers false postives way too often in here.
 #if defined(__GNUC__) && !defined(__clang__)
     #pragma GCC diagnostic ignored "-Wclobbered"
@@ -288,8 +750,40 @@ SkJpegCodec::SkJpegCodec(int width, int height, const SkEncodedInfo& info, SkStr
     , fSwizzleSrcRow(nullptr)
     , fColorXformSrcRow(nullptr)
     , fSwizzlerSubset(SkIRect::MakeEmpty())
-{}
+{
+#if defined(MTK_JPEG_HW_DECODER) || defined(MTK_JPEG_HW_REGION_RESIZER)
+    fIonClientHnd = ion_open();
+    if (fIonClientHnd < 0)
+    {
+        SkCodecPrintf("ion_open failed\n");
+        fIonClientHnd = -1;
+    }
+    fISOSpeedRatings = -1;
+    fIonBufferStorage = NULL;
+    fIsSampleDecode = false;
+    fSampleDecodeY = 0;
+#if defined(MTK_JPEG_HW_REGION_RESIZER)
+    fFirstTileDone = false;
+    fUseHWResizer = false;
+    fEnTdshp = false;
+#endif
+#endif
+}
 
+#if defined(MTK_JPEG_HW_DECODER) || defined(MTK_JPEG_HW_REGION_RESIZER)
+SkJpegCodec::~SkJpegCodec()
+{
+#if defined(MTK_JPEG_HW_DECODER) || defined(MTK_JPEG_HW_REGION_RESIZER)
+    if (fIonBufferStorage)
+    {
+        delete fIonBufferStorage;
+        fIonBufferStorage = NULL;
+    }
+#endif
+    if (fIonClientHnd != -1)
+        ion_close(fIonClientHnd);
+}
+#endif
 /*
  * Return the row bytes of a particular image type and width
  */
@@ -572,7 +1066,102 @@ SkCodec::Result SkJpegCodec::onGetPixels(const SkImageInfo& dstInfo,
         // Subsets are not supported.
         return kUnimplemented;
     }
+    if (dstInfo.width() >= 200 && dstInfo.height() >= 200)
+        SkCodecPrintf("SkJpegCodec::onGetPixels flag:%d ,+ ",this->getPostProcFlag());
 
+#if defined(MTK_JPEG_HW_DECODER)
+    char value[PROPERTY_VALUE_MAX];
+    unsigned long u4PQOpt;
+    unsigned int enTdshp = 0x0;
+    property_get("persist.PQ", value, "1");
+    u4PQOpt = atol(value);
+    if(0 != u4PQOpt)
+    {
+        property_get("jpegDecode.forceEnable.PQ", value, "0");
+        u4PQOpt = atol(value);
+        if (0 == u4PQOpt)
+            enTdshp = (this->getPostProcFlag()) & 0x1;
+        else
+            enTdshp = 0x1;
+    }
+    if (enTdshp == 0x1)
+    {
+        bool initMhalJpeg = false;
+        bool streamModified = false;
+        void* jpegDecHandle = NULL;
+        SkStream* stream = this->stream();
+        size_t curStreamPosition = stream->getPosition();
+        if (stream->hasPosition() && stream->hasLength() && stream->rewind())
+        {
+            size_t streamLength = stream->getLength();
+            if (!fIonBufferStorage)
+                fIonBufferStorage = new SkIonMalloc(fIonClientHnd);
+            if (fIonBufferStorage)
+            {
+                fIonBufferStorage->setStreamSize(streamLength);
+                if (streamLength != 0)
+                {
+                    if (fIonBufferStorage->reset(TO_CEIL(streamLength, 512) + 512))
+                    {
+                        size_t bytes_read = stream->read(fIonBufferStorage->getAddr(), streamLength);
+                        if (bytes_read == streamLength)
+                        {
+                            streamModified = true;
+                            fISOSpeedRatings = getISOSpeedRatings(fIonBufferStorage->getAddr(), bytes_read);
+                            unsigned int bsOffset;
+                            if (onDecodeParser((unsigned char*)fIonBufferStorage->getAddr(), streamLength, &jpegDecHandle))
+                            {
+                                if (getEOImarker((unsigned char*)fIonBufferStorage->getAddr() + (streamLength - 1 - 128),
+                                             (unsigned char*)fIonBufferStorage->getAddr() + streamLength, &bsOffset))
+                                    initMhalJpeg = true;
+                                else
+                                {
+                                    SkCodecPrintf("No EOI were found in picture! Use SW decoder instead.");
+                                    if (MHAL_NO_ERROR != mHalJpeg(MHAL_IOCTL_JPEG_DEC_CANCEL, jpegDecHandle, 0, NULL, 0, NULL))
+                                    {
+                                        SkCodecPrintf("Can not release JPEG HW Decoder\n");
+                                    }
+                                }
+                            }
+                            else
+                                SkCodecPrintf("onDecodeParser fail! Use SW decoder instead.");
+                        }
+                    }
+                }
+            }
+            if (initMhalJpeg)
+            {
+                SkCodecPrintf("SkJpegCodec::onGetPixels img.info(%d, %d, %d, %d), enTdshp %d, isoSpeed %d",
+                              dstInfo.width(), dstInfo.height(), dstRowBytes, dstInfo.colorType(),
+                              enTdshp, fISOSpeedRatings);
+                if (onDecodeHW(fIonBufferStorage->getAddr(), fIonClientHnd, fIonBufferStorage->getSize(),
+                               fIonBufferStorage->getStreamSize(), fIonBufferStorage->getFD(),
+                               dst, dstInfo.width(), dstInfo.height(), dstRowBytes, dstInfo.colorType(),
+                               jpegDecHandle, enTdshp, NULL, fISOSpeedRatings))
+                {
+                    return kSuccess;
+                }
+                else
+                {
+                    SkCodecPrintf("onDecodeHW fail! Use SW decoder instead.");
+                }
+            }
+            if (streamModified)
+            {
+                stream->rewind();
+                if (curStreamPosition != 0 && !stream->seek(curStreamPosition))
+                {
+                    SkCodecPrintf("onDecodeHW fail! stream seek also fail! break!!");
+                    return kCouldNotRewind;
+                }
+            }
+        }
+        else
+        {
+            SkCodecPrintf("stream op. does not support, fallback to SW decoder");
+        }
+    }
+#endif
     // Get a pointer to the decompress info since we will use it quite frequently
     jpeg_decompress_struct* dinfo = fDecoderMgr->dinfo();
 
@@ -610,6 +1199,9 @@ SkCodec::Result SkJpegCodec::onGetPixels(const SkImageInfo& dstInfo,
         *rowsDecoded = rows;
         return fDecoderMgr->returnFailure("Incomplete image data", kIncompleteInput);
     }
+
+    if (dstInfo.width() >= 200 && dstInfo.height() >= 200)
+        SkCodecPrintf("SkJpegCodec::onGetPixels -");
 
     return kSuccess;
 }
@@ -684,6 +1276,55 @@ SkSampler* SkJpegCodec::getSampler(bool createIfNecessary) {
 
 SkCodec::Result SkJpegCodec::onStartScanlineDecode(const SkImageInfo& dstInfo,
         const Options& options, SkPMColor ctable[], int* ctableCount) {
+#if defined(MTK_JPEG_HW_REGION_RESIZER)
+    if (fFirstTileDone == false)
+    {
+        unsigned long u4PQOpt;
+        char value[PROPERTY_VALUE_MAX];
+        property_get("persist.PQ", value, "1");
+        u4PQOpt = atol(value);
+        if(0 != u4PQOpt)
+        {
+            property_get("jpegDecode.forceEnable.PQ", value, "0");
+            u4PQOpt = atol(value);
+            if (0 == u4PQOpt)
+                fEnTdshp = (this->getPostProcFlag()) & 0x1;
+            else
+                fEnTdshp = 0x1;
+            if (!fEnTdshp)
+            {
+                fFirstTileDone = true;
+                fUseHWResizer = false;
+            }
+        }
+        if (fEnTdshp && fISOSpeedRatings == -1)
+        {
+            SkStream* stream = this->stream();
+            size_t curStreamPosition = stream->getPosition();
+            SkAutoTMalloc<uint8_t> tmpStorage;
+            if (stream->hasPosition() && stream->rewind())
+            {
+                tmpStorage.reset(MAX_APP1_HEADER_SIZE);
+                size_t bytes_read = stream->read(tmpStorage.get(), MAX_APP1_HEADER_SIZE);
+                fISOSpeedRatings = getISOSpeedRatings(tmpStorage.get(), bytes_read);
+                stream->rewind();
+                if (curStreamPosition != 0 && !stream->seek(curStreamPosition))
+                {
+                    SkCodecPrintf("onStartScanlineDecode stream seek fail!");
+                    return kCouldNotRewind;
+                }
+            }
+        }
+        SkCodecPrintf("SkJpegCodec::onStartScanlineDecode fEnTdshp %d fISOSpeedRatings %d!\n", fEnTdshp, fISOSpeedRatings);
+    }
+    if(!fFirstTileDone || fUseHWResizer)
+    {
+        if (!fIonBufferStorage)
+            fIonBufferStorage = new SkIonMalloc(fIonClientHnd);
+        if (fIonBufferStorage)
+            fIonBufferStorage->setColor(dstInfo.colorType());
+    }
+#endif
     // Set the jump location for libjpeg errors
     if (setjmp(fDecoderMgr->getJmpBuf())) {
         SkCodecPrintf("setjmp: Error from libjpeg\n");
@@ -753,8 +1394,163 @@ SkCodec::Result SkJpegCodec::onStartScanlineDecode(const SkImageInfo& dstInfo,
     return kSuccess;
 }
 
+#if defined(MTK_JPEG_HW_REGION_RESIZER)
+int SkJpegCodec::onGetHWScanlines(void* dst, int count, size_t dstRowBytes) {
+		if (setjmp(fDecoderMgr->getJmpBuf())) {
+			return fDecoderMgr->returnFailure("setjmp", kInvalidInput);
+		}
+		JSAMPLE* dstRow;
+		size_t srcRowBytes = get_row_bytes(fDecoderMgr->dinfo());
+		JSAMPLE* tmpBuffer;
+		int outputWidth = (fSwizzlerSubset.isEmpty()) ? fDecoderMgr->dinfo()->output_width : fSwizzlerSubset.width();
+		size_t expectedStride = (fIonBufferStorage)? outputWidth * SkColorTypeBytesPerPixel(fIonBufferStorage->getColor()) : dstRowBytes;
+		if ((!fFirstTileDone || fUseHWResizer) && fIsSampleDecode == false)
+		{
+			if (expectedStride > dstRowBytes && expectedStride / fSwizzler->sampleX() == dstRowBytes)
+			{
+				fIonBufferStorage->reset(dstRowBytes * fDecoderMgr->dinfo()->output_height / fSwizzler->sampleX());
+				fSampleDecodeY = 0;
+				fIsSampleDecode = true;
+				fFirstTileDone = true;
+				fUseHWResizer = false;
+				SkCodecPrintf("SkJpegCodec::onGetScanlines SampleDecode region(%d, %d), size %d, tmpBuffer %p, dstAddr %p\n",
+					fDecoderMgr->dinfo()->output_width / fSwizzler->sampleX(),
+					fDecoderMgr->dinfo()->output_height / fSwizzler->sampleX(),
+					dstRowBytes * fDecoderMgr->dinfo()->output_height / fSwizzler->sampleX(),
+					fIonBufferStorage->getAddr(), dst);
+			}
+			else
+			{
+				fIonBufferStorage->reset(dstRowBytes * count);
+				fIsSampleDecode = false;
+			}
+			tmpBuffer = (JSAMPLE*) fIonBufferStorage->getAddr();
+		}
+		else if (fIsSampleDecode == true)
+		{
+			tmpBuffer = ((JSAMPLE*) fIonBufferStorage->getAddr()) + (fSampleDecodeY * dstRowBytes);
+		}
+		else
+		{
+			tmpBuffer = (JSAMPLE*) dst;
+			fFirstTileDone = true;
+			fUseHWResizer = false;
+		}
+		if (fSwizzler) {
+			dstRow = fSwizzleSrcRow;
+		} else {
+			SkASSERT(count == 1 || dstRowBytes >= srcRowBytes);
+    #if defined(MTK_JPEG_HW_REGION_RESIZER)
+			dstRow = tmpBuffer;
+    #else
+			dstRow = (JSAMPLE*) dst;
+    #endif
+		}
+		for (int y = 0; y < count; y++) {
+			uint32_t rowsDecoded = jpeg_read_scanlines(fDecoderMgr->dinfo(), &dstRow, 1);
+			sk_msan_mark_initialized(dstRow, dstRow + srcRowBytes, "skbug.com/4550");
+			if (rowsDecoded != 1) {
+				fDecoderMgr->dinfo()->output_scanline = this->dstInfo().height();
+				if((!fFirstTileDone || fUseHWResizer) || fIsSampleDecode == true)
+				{
+					bool result = false;
+					unsigned long addrOffset =0;
+					if (fIsSampleDecode == false)
+						result = ImgPostProc(tmpBuffer, fIonClientHnd, fIonBufferStorage->getFD(), dst,
+							outputWidth, y, dstRowBytes, fIonBufferStorage->getColor(),
+							fEnTdshp, NULL, fISOSpeedRatings);
+					else
+					{
+						addrOffset = fSampleDecodeY * dstRowBytes;
+						result = ImgPostProc(tmpBuffer - addrOffset, fIonClientHnd,
+							fIonBufferStorage->getFD(), (void*)((unsigned char*)dst - addrOffset),
+							outputWidth / fSwizzler->sampleX(), (fSampleDecodeY + y),
+							dstRowBytes, fIonBufferStorage->getColor(), fEnTdshp, NULL, fISOSpeedRatings);
+						SkCodecPrintf("SkJpegCodec::onGetScanlines ImgPostProc src %p, dst %p, fSampleDecodeY %u\n",
+							tmpBuffer, dst, fSampleDecodeY);
+					}
+					if(!result)
+					{
+						fFirstTileDone = true;
+						SkCodecPrintf("ImgPostProc fail, use default solution, L:%d!!\n", __LINE__);
+						if (fIsSampleDecode == false)
+							memcpy(dst, tmpBuffer, dstRowBytes * y);
+						else
+							memcpy((void*)((unsigned char*)dst - addrOffset), (void*)(tmpBuffer - addrOffset),
+								   dstRowBytes * (fSampleDecodeY + y));
+					}
+					else
+					{
+						fFirstTileDone = true;
+						fUseHWResizer = true;
+						SkCodecPrintf("ImgPostProc successfully, L:%d!!\n", __LINE__);
+					}
+				}
+				return y;
+			}
+			if (fSwizzler) {
+        #if defined(MTK_JPEG_HW_REGION_RESIZER)
+				fSwizzler->swizzle(tmpBuffer, dstRow);
+				if (fIsSampleDecode == false)
+					tmpBuffer = SkTAddOffset<JSAMPLE>(tmpBuffer, dstRowBytes);
+        #else
+				fSwizzler->swizzle(dst, dstRow);
+				if (fIsSampleDecode == false)
+					dst = SkTAddOffset<JSAMPLE>(dst, dstRowBytes);
+        #endif
+			} else {
+				dstRow = SkTAddOffset<JSAMPLE>(dstRow, dstRowBytes);
+			}
+		}
+		if((!fFirstTileDone || fUseHWResizer) ||
+			(fIsSampleDecode == true && (fSampleDecodeY + count) == fDecoderMgr->dinfo()->output_height / fSwizzler->sampleX()))
+		{
+			bool result = false;
+			unsigned long addrOffset = 0;
+			if (fIsSampleDecode == false)
+				result = ImgPostProc(tmpBuffer, fIonClientHnd, fIonBufferStorage->getFD(), dst,
+					outputWidth, count, dstRowBytes, fIonBufferStorage->getColor(),
+					fEnTdshp, NULL, fISOSpeedRatings);
+			else
+			{
+				addrOffset = fSampleDecodeY * dstRowBytes;
+				result = ImgPostProc(tmpBuffer - addrOffset, fIonClientHnd,
+					fIonBufferStorage->getFD(), (void*)((unsigned char*)dst - addrOffset),
+					outputWidth / fSwizzler->sampleX(), (fSampleDecodeY + count),
+					dstRowBytes, fIonBufferStorage->getColor(), fEnTdshp, NULL, fISOSpeedRatings);
+				SkCodecPrintf("SkJpegCodec::onGetScanlines ImgPostProc src %p, dst %p, fSampleDecodeY %u\n",
+					tmpBuffer, dst, fSampleDecodeY);
+			}
+			if(!result)
+			{
+				fFirstTileDone = true;
+				SkCodecPrintf("ImgPostProc fail, use default solution, L:%d!!\n", __LINE__);
+				if (fIsSampleDecode == false)
+					memcpy(dst, tmpBuffer, dstRowBytes * count);
+				else
+					memcpy((void*)((unsigned char*)dst - addrOffset), (void*)(tmpBuffer - addrOffset),
+						   dstRowBytes * (fSampleDecodeY + count));
+			}
+			else
+			{
+				fFirstTileDone = true;
+				fUseHWResizer = true;
+				SkCodecPrintf("ImgPostProc successfully, L:%d!!\n", __LINE__);
+			}
+		}
+		else if (fIsSampleDecode == true)
+		{
+			fSampleDecodeY = fSampleDecodeY + count;
+		}
+		return count;
+}
+#endif
 int SkJpegCodec::onGetScanlines(void* dst, int count, size_t dstRowBytes) {
+#if defined(MTK_JPEG_HW_REGION_RESIZER)
+	int rows = onGetHWScanlines(dst, count, dstRowBytes);
+#else
     int rows = this->readRows(this->dstInfo(), dst, dstRowBytes, count, this->options());
+#endif	
     if (rows < count) {
         // This allows us to skip calling jpeg_finish_decompress().
         fDecoderMgr->dinfo()->output_scanline = this->dstInfo().height();

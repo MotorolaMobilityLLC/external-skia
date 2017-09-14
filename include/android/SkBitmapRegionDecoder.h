@@ -76,6 +76,11 @@ public:
     virtual sk_sp<SkColorSpace> computeOutputColorSpace(SkColorType outputColorType,
             sk_sp<SkColorSpace> prefColorSpace = nullptr) = 0;
 
+    #ifdef MTK_IMAGE_ENABLE_PQ_FOR_JPEG
+    /*avoid werror*/
+    template<typename... T> void UNUSED(const T&...) {}
+    virtual void setPostProcFlag(int flag) { UNUSED(flag);}
+    #endif
 
     int width() const { return fWidth; }
     int height() const { return fHeight; }

@@ -16,6 +16,106 @@
 #include "SkStream.h"
 #include "SkTemplates.h"
 
+#if defined(MTK_JPEG_HW_DECODER) || defined(MTK_JPEG_HW_REGION_RESIZER)
+#include <sys/mman.h>
+#include <ion.h>
+#include <ion/ion.h>
+#include <linux/mtk_ion.h>
+class SkIonMalloc
+{
+public:
+    SkIonMalloc(int ionClientHnd): fIonAllocHnd(-1), fAddr(NULL), fShareFD(-1), fSize(0), fStreamSize(0), fColorType(kRGBA_8888_SkColorType)
+    {
+        if (ionClientHnd < 0)
+        {
+            SkDebugf("invalid ionClientHnd(%d)\n", ionClientHnd);
+            fIonClientHnd = -1;
+        }
+        else
+            fIonClientHnd = ionClientHnd;
+    }
+    ~SkIonMalloc()
+    {
+        free();
+    }
+    void* reset(size_t size)
+    {
+        int ret;
+        if (fIonClientHnd >= 0)
+        {
+            if(fAddr != NULL)
+                free();
+            fSize = size;
+            ret = ion_alloc(fIonClientHnd, size, 0, ION_HEAP_MULTIMEDIA_MASK, ION_FLAG_CACHED | ION_FLAG_CACHED_NEEDS_SYNC, &fIonAllocHnd);
+            if (ret)
+            {
+                SkDebugf("SkIonMalloc::ion_alloc failed (%d, %d, %d)\n", fIonClientHnd, size, fIonAllocHnd);
+                return NULL;
+            }
+            ret = ion_share(fIonClientHnd, fIonAllocHnd, &fShareFD);
+            if (ret)
+            {
+                SkDebugf("SkIonMalloc::ion_share failed (%d, %d, %d)\n", fIonClientHnd, fIonAllocHnd, fShareFD);
+                free();
+                return NULL;
+            }
+            fAddr = ion_mmap(fIonClientHnd, 0, size, PROT_READ | PROT_WRITE, MAP_SHARED, fShareFD, 0);
+            if (fAddr == MAP_FAILED)
+            {
+                SkDebugf("SkIonMalloc::ion_mmap failed (%d, %d, %d)\n", fIonClientHnd, size, fShareFD);
+                free();
+                return NULL;
+            }
+            return fAddr;
+        }
+        else
+            return 0;
+    }
+    void free()
+    {
+        if (fIonClientHnd >= 0)
+        {
+            if(fAddr != NULL)
+            {
+                int ret = ion_munmap(fIonClientHnd, fAddr, fSize);
+                if (ret < 0)
+                    SkDebugf("SkIonMalloc::ion_munmap failed (%d, %p, %d)\n", fIonClientHnd, fAddr, fSize);
+                else
+                    fAddr = NULL;
+            }
+            if (fShareFD != -1)
+            {
+                if (ion_share_close(fIonClientHnd, fShareFD))
+                {
+                    SkDebugf("SkIonMalloc::ion_share_close failed (%d, %d)\n", fIonClientHnd, fShareFD);
+                }
+            }
+            if (fIonAllocHnd != -1)
+            {
+                if (ion_free(fIonClientHnd, fIonAllocHnd))
+                {
+                    SkDebugf("SkIonMalloc::ion_free failed (%d %d)\n", fIonClientHnd, fIonAllocHnd);
+                }
+            }
+        }
+    }
+    void setStreamSize(int streamSize) { fStreamSize = streamSize; }
+    void setColor(SkColorType color) { fColorType = color; }
+    void* getAddr() { return fAddr; }
+    int getFD() { return fShareFD; }
+    int getSize() { return fSize; }
+    int getStreamSize() { return fStreamSize; }
+    SkColorType getColor() { return fColorType; }
+private:
+    ion_user_handle_t fIonAllocHnd;
+    int               fIonClientHnd;
+    void*             fAddr;
+    int               fShareFD;
+    size_t            fSize;
+    size_t            fStreamSize;
+    SkColorType       fColorType;
+};
+#endif
 class JpegDecoderMgr;
 
 /*
@@ -103,6 +203,9 @@ private:
     SkJpegCodec(int width, int height, const SkEncodedInfo& info, SkStream* stream,
             JpegDecoderMgr* decoderMgr, sk_sp<SkColorSpace> colorSpace, Origin origin);
 
+#if defined(MTK_JPEG_HW_DECODER) || defined(MTK_JPEG_HW_REGION_RESIZER)
+    ~SkJpegCodec();
+#endif
     /*
      * Checks if the conversion between the input image and the requested output
      * image has been implemented.
@@ -123,6 +226,9 @@ private:
     Result onStartScanlineDecode(const SkImageInfo& dstInfo, const Options& options,
             SkPMColor ctable[], int* ctableCount) override;
     int onGetScanlines(void* dst, int count, size_t rowBytes) override;
+#if defined(MTK_JPEG_HW_REGION_RESIZER)	
+	int onGetHWScanlines(void* dst, int count, size_t rowBytes) ;
+#endif
     bool onSkipScanlines(int count) override;
 
     std::unique_ptr<JpegDecoderMgr>    fDecoderMgr;
@@ -146,6 +252,18 @@ private:
     friend class SkRawCodec;
 
     typedef SkCodec INHERITED;
+#if defined(MTK_JPEG_HW_DECODER) || defined(MTK_JPEG_HW_REGION_RESIZER)
+    int                    fIonClientHnd;
+    int                    fISOSpeedRatings;
+    SkIonMalloc*           fIonBufferStorage;
+    bool                   fIsSampleDecode;
+    unsigned int           fSampleDecodeY;
+#endif
+#if defined(MTK_JPEG_HW_REGION_RESIZER)
+    bool                   fFirstTileDone;
+    bool                   fUseHWResizer;
+    bool                   fEnTdshp;
+#endif
 };
 
 #endif
