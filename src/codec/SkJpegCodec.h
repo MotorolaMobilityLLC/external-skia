@@ -218,6 +218,9 @@ private:
                             bool needsCMYKToRGB);
     void allocateStorage(const SkImageInfo& dstInfo);
     int readRows(const SkImageInfo& dstInfo, void* dst, size_t rowBytes, int count, const Options&);
+#if defined(MTK_JPEG_HW_REGION_RESIZER)
+    int readRows_MTK(const SkImageInfo& dstInfo, void* dst, size_t rowBytes, int count, const Options&);
+#endif
 
     /*
      * Scanline decoding.
@@ -226,9 +229,6 @@ private:
     Result onStartScanlineDecode(const SkImageInfo& dstInfo, const Options& options,
             SkPMColor ctable[], int* ctableCount) override;
     int onGetScanlines(void* dst, int count, size_t rowBytes) override;
-#if defined(MTK_JPEG_HW_REGION_RESIZER)	
-	int onGetHWScanlines(void* dst, int count, size_t rowBytes) ;
-#endif
     bool onSkipScanlines(int count) override;
 
     std::unique_ptr<JpegDecoderMgr>    fDecoderMgr;

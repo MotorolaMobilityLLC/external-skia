@@ -1039,6 +1039,206 @@ int SkJpegCodec::readRows(const SkImageInfo& dstInfo, void* dst, size_t rowBytes
     return count;
 }
 
+#if defined(MTK_JPEG_HW_REGION_RESIZER)
+int SkJpegCodec::readRows_MTK(const SkImageInfo& dstInfo, void* dst, size_t rowBytes, int count,
+                          const Options& opts) {
+    // Set the jump location for libjpeg-turbo errors
+    if (setjmp(fDecoderMgr->getJmpBuf())) {
+        return 0;
+    }
+
+    JSAMPLE* tmpBuffer;
+    int outputWidth = (fSwizzlerSubset.isEmpty()) ? fDecoderMgr->dinfo()->output_width : fSwizzlerSubset.width();
+    int outputHeight = (fSwizzlerSubset.isEmpty()) ? fDecoderMgr->dinfo()->output_height :
+        // need to divde the fSwizzlerSubset.height() with nativeSample because Google bring the native height to codec
+        fSwizzlerSubset.height() * fDecoderMgr->dinfo()->scale_num / fDecoderMgr->dinfo()->scale_denom;
+    size_t expectedStride = (fIonBufferStorage)? outputWidth * SkColorTypeBytesPerPixel(fIonBufferStorage->getColor()) : rowBytes;
+
+    if ((!fFirstTileDone || fUseHWResizer) && fIsSampleDecode == false)
+    {
+        // do sampleDecode(full frame decode) => sampleSize does not support by decoder(1,2,4,8)
+        // sampleDecode: 1. allocate buffer with size dstRowBytes * fDecoderMgr->dinfo()->output_height / fSwizzler->sampleX()
+        if (expectedStride > rowBytes && expectedStride / fSwizzler->sampleX() == rowBytes && fIonBufferStorage)
+        {
+            fIonBufferStorage->reset(rowBytes * fDecoderMgr->dinfo()->output_height / fSwizzler->sampleX());
+            tmpBuffer = (JSAMPLE*) fIonBufferStorage->getAddr();
+            fSampleDecodeY = 0;
+            fIsSampleDecode = true;
+            fFirstTileDone = true;
+            fUseHWResizer = false;
+            SkCodecPrintf("SkJpegCodec::onGetScanlines SampleDecode region(%d, %d), size %d, tmpBuffer %p, dstAddr %p\n",
+                outputWidth / fSwizzler->sampleX(),
+                outputHeight / fSwizzler->sampleX(),
+                rowBytes * outputHeight / fSwizzler->sampleX(),
+                fIonBufferStorage->getAddr(), dst);
+        }
+        // non-sample decode case
+        else if (expectedStride <= rowBytes && fIonBufferStorage)
+        {
+            fIonBufferStorage->reset(rowBytes * count);
+            tmpBuffer = (JSAMPLE*) fIonBufferStorage->getAddr();
+            fIsSampleDecode = false;
+        }
+        // stride setting is not expected, use default solution
+        else
+        {
+            // use SW decoder only
+            tmpBuffer = (JSAMPLE*) dst;
+            fFirstTileDone = true;
+            fUseHWResizer = false;
+        }
+    }
+    // sampleDecode: 2.1 calculate tmpBuffer with fSampleDecodeY and dstRowBytes
+    else if (fIsSampleDecode == true && fIonBufferStorage)
+    {
+        tmpBuffer = ((JSAMPLE*) fIonBufferStorage->getAddr()) + (fSampleDecodeY * rowBytes);
+    }
+    else
+    {
+        // use SW decoder only
+        tmpBuffer = (JSAMPLE*) dst;
+        fFirstTileDone = true;
+        fUseHWResizer = false;
+        //SkCodecPrintf("onGetScanlines use SW fFirstTileDone %d, fUseHWResizer %d, bytesToAlloc %d\n",
+        //    fFirstTileDone, fUseHWResizer, dstRowBytes * count);
+    }
+
+    // When fSwizzleSrcRow is non-null, it means that we need to swizzle.  In this case,
+    // we will always decode into fSwizzlerSrcRow before swizzling into the next buffer.
+    // We can never swizzle "in place" because the swizzler may perform sampling and/or
+    // subsetting.
+    // When fColorXformSrcRow is non-null, it means that we need to color xform and that
+    // we cannot color xform "in place" (many times we can, but not when the dst is F16).
+    // In this case, we will color xform from fColorXformSrcRow into the dst.
+    JSAMPLE* decodeDst = (JSAMPLE*) tmpBuffer;
+    uint32_t* swizzleDst = (uint32_t*) tmpBuffer;
+    size_t decodeDstRowBytes = rowBytes;
+    size_t swizzleDstRowBytes = rowBytes;
+    int dstWidth = opts.fSubset ? opts.fSubset->width() : dstInfo.width();
+    if (fSwizzleSrcRow && fColorXformSrcRow) {
+        decodeDst = (JSAMPLE*) fSwizzleSrcRow;
+        swizzleDst = fColorXformSrcRow;
+        decodeDstRowBytes = 0;
+        swizzleDstRowBytes = 0;
+        dstWidth = fSwizzler->swizzleWidth();
+    } else if (fColorXformSrcRow) {
+        decodeDst = (JSAMPLE*) fColorXformSrcRow;
+        swizzleDst = fColorXformSrcRow;
+        decodeDstRowBytes = 0;
+        swizzleDstRowBytes = 0;
+    } else if (fSwizzleSrcRow) {
+        decodeDst = (JSAMPLE*) fSwizzleSrcRow;
+        decodeDstRowBytes = 0;
+        dstWidth = fSwizzler->swizzleWidth();
+    }
+
+    for (int y = 0; y < count; y++) {
+        uint32_t lines = jpeg_read_scanlines(fDecoderMgr->dinfo(), &decodeDst, 1);
+        size_t srcRowBytes = get_row_bytes(fDecoderMgr->dinfo());
+        sk_msan_mark_initialized(decodeDst, decodeDst + srcRowBytes, "skbug.com/4550");
+        if (0 == lines) {
+            if((!fFirstTileDone || fUseHWResizer) || fIsSampleDecode == true)
+            {
+                bool result = false;
+                unsigned long addrOffset =0;
+                if (fIsSampleDecode == false)
+                    result = ImgPostProc(tmpBuffer, fIonClientHnd, fIonBufferStorage->getFD(), dst,
+                        outputWidth, y, rowBytes, fIonBufferStorage->getColor(),
+                        fEnTdshp, NULL, fISOSpeedRatings);
+                else
+                {
+                    // sampledecode: 3. do ImgPostProc to apply PQ effect
+                    addrOffset = fSampleDecodeY * rowBytes;
+                    SkCodecPrintf("SkJpegCodec::onGetScanlines ImgPostProc src %p, dst %p, fSampleDecodeY %u\n",
+                        tmpBuffer, dst, fSampleDecodeY);
+                    result = ImgPostProc(tmpBuffer - addrOffset, fIonClientHnd,
+                        fIonBufferStorage->getFD(), (void*)((unsigned char*)dst - addrOffset),
+                        outputWidth / fSwizzler->sampleX(), (fSampleDecodeY + y),
+                        rowBytes, fIonBufferStorage->getColor(), fEnTdshp, NULL, fISOSpeedRatings);
+                }
+                if(!result)
+                {
+                    fFirstTileDone = true;
+                    SkCodecPrintf("ImgPostProc fail, use default solution, L:%d!!\n", __LINE__);
+                    if (fIsSampleDecode == false)
+                        memcpy(dst, tmpBuffer, rowBytes * y);
+                    else
+                        memcpy((void*)((unsigned char*)dst - addrOffset), (void*)(tmpBuffer - addrOffset),
+                               rowBytes * (fSampleDecodeY + y));
+                }
+                else
+                {
+                    fFirstTileDone = true;
+                    fUseHWResizer = true;
+                    //SkCodecPrintf("ImgPostProc successfully, L:%d!!\n", __LINE__);
+                }
+            }
+            return y;
+        }
+
+        if (fSwizzler) {
+            fSwizzler->swizzle(swizzleDst, decodeDst);
+        }
+
+        if (this->colorXform()) {
+            SkAssertResult(this->colorXform()->apply(select_xform_format(dstInfo.colorType()), tmpBuffer,
+                    SkColorSpaceXform::kRGBA_8888_ColorFormat, swizzleDst, dstWidth,
+                    kOpaque_SkAlphaType));
+            if (fIsSampleDecode == false)
+                tmpBuffer = SkTAddOffset<JSAMPLE>(tmpBuffer, rowBytes);
+        }
+
+        decodeDst = SkTAddOffset<JSAMPLE>(decodeDst, decodeDstRowBytes);
+        swizzleDst = SkTAddOffset<uint32_t>(swizzleDst, swizzleDstRowBytes);
+    }
+
+    if((!fFirstTileDone || fUseHWResizer) ||
+        (fIsSampleDecode == true && (fSampleDecodeY + count) == (outputHeight / fSwizzler->sampleX())))
+    {
+        bool result = false;
+        unsigned long addrOffset = 0;
+        if (fIsSampleDecode == false)
+            result = ImgPostProc(tmpBuffer, fIonClientHnd, fIonBufferStorage->getFD(), dst,
+                outputWidth, count, rowBytes, fIonBufferStorage->getColor(),
+                fEnTdshp, NULL, fISOSpeedRatings);
+        // sampledecode: 3. do ImgPostProc to apply PQ effect
+        else
+        {
+            addrOffset = fSampleDecodeY * rowBytes;
+            result = ImgPostProc(tmpBuffer - addrOffset, fIonClientHnd,
+                fIonBufferStorage->getFD(), (void*)((unsigned char*)dst - addrOffset),
+                outputWidth / fSwizzler->sampleX(), (fSampleDecodeY + count),
+                rowBytes, fIonBufferStorage->getColor(), fEnTdshp, NULL, fISOSpeedRatings);
+            SkCodecPrintf("SkJpegCodec::onGetScanlines ImgPostProc src %p, dst %p, fSampleDecodeY %u\n",
+                tmpBuffer, dst, fSampleDecodeY);
+        }
+        if(!result)
+        {
+            fFirstTileDone = true;
+            SkCodecPrintf("ImgPostProc fail, use default solution, L:%d!!\n", __LINE__);
+            if (fIsSampleDecode == false)
+                memcpy(dst, tmpBuffer, rowBytes * count);
+            else
+                memcpy((void*)((unsigned char*)dst - addrOffset), (void*)(tmpBuffer - addrOffset),
+                       rowBytes * (fSampleDecodeY + count));
+        }
+        else
+        {
+            fFirstTileDone = true;
+            fUseHWResizer = true;
+            //SkCodecPrintf("ImgPostProc successfully, L:%d!!\n", __LINE__);
+        }
+    }
+    // sampleDecode: 2.2 record each count size by fSampleDecodeY until reach the target height
+    else if (fIsSampleDecode == true)
+    {
+        fSampleDecodeY = fSampleDecodeY + count;
+    }
+
+    return count;
+}
+#endif
+
 /*
  * This is a bit tricky.  We only need the swizzler to do format conversion if the jpeg is
  * encoded as CMYK.
@@ -1084,6 +1284,7 @@ SkCodec::Result SkJpegCodec::onGetPixels(const SkImageInfo& dstInfo,
         else
             enTdshp = 0x1;
     }
+
     if (enTdshp == 0x1)
     {
         bool initMhalJpeg = false;
@@ -1129,6 +1330,7 @@ SkCodec::Result SkJpegCodec::onGetPixels(const SkImageInfo& dstInfo,
                     }
                 }
             }
+
             if (initMhalJpeg)
             {
                 SkCodecPrintf("SkJpegCodec::onGetPixels img.info(%d, %d, %d, %d), enTdshp %d, isoSpeed %d",
@@ -1146,6 +1348,7 @@ SkCodec::Result SkJpegCodec::onGetPixels(const SkImageInfo& dstInfo,
                     SkCodecPrintf("onDecodeHW fail! Use SW decoder instead.");
                 }
             }
+
             if (streamModified)
             {
                 stream->rewind();
@@ -1289,14 +1492,18 @@ SkCodec::Result SkJpegCodec::onStartScanlineDecode(const SkImageInfo& dstInfo,
             u4PQOpt = atol(value);
             if (0 == u4PQOpt)
                 fEnTdshp = (this->getPostProcFlag()) & 0x1;
-            else
+            else if (1 == u4PQOpt)
                 fEnTdshp = 0x1;
+            else
+                fEnTdshp = 0x0;
+
             if (!fEnTdshp)
             {
                 fFirstTileDone = true;
                 fUseHWResizer = false;
             }
         }
+
         if (fEnTdshp && fISOSpeedRatings == -1)
         {
             SkStream* stream = this->stream();
@@ -1319,6 +1526,13 @@ SkCodec::Result SkJpegCodec::onStartScanlineDecode(const SkImageInfo& dstInfo,
     }
     if(!fFirstTileDone || fUseHWResizer)
     {
+        // create new region which is padding 40 pixels for each boundary
+        //SkIRect rectHW;
+        //rectHW.set((subset.left() >= 40)? subset.left() - 40 : 0,
+        //           (subset.top() >= 40)? subset.top() - 40: 0,
+        //           (subset.right() + 40 <= fCodec->getInfo().width())? subset.right() + 40: fCodec->getInfo().width(),
+        //           (subset.bottom() + 40 <= fCodec->getInfo().height())? subset.bottom() + 40: fCodec->getInfo().height());
+
         if (!fIonBufferStorage)
             fIonBufferStorage = new SkIonMalloc(fIonClientHnd);
         if (fIonBufferStorage)
@@ -1394,163 +1608,12 @@ SkCodec::Result SkJpegCodec::onStartScanlineDecode(const SkImageInfo& dstInfo,
     return kSuccess;
 }
 
-#if defined(MTK_JPEG_HW_REGION_RESIZER)
-int SkJpegCodec::onGetHWScanlines(void* dst, int count, size_t dstRowBytes) {
-		if (setjmp(fDecoderMgr->getJmpBuf())) {
-			return fDecoderMgr->returnFailure("setjmp", kInvalidInput);
-		}
-		JSAMPLE* dstRow;
-		size_t srcRowBytes = get_row_bytes(fDecoderMgr->dinfo());
-		JSAMPLE* tmpBuffer;
-		int outputWidth = (fSwizzlerSubset.isEmpty()) ? fDecoderMgr->dinfo()->output_width : fSwizzlerSubset.width();
-		size_t expectedStride = (fIonBufferStorage)? outputWidth * SkColorTypeBytesPerPixel(fIonBufferStorage->getColor()) : dstRowBytes;
-		if ((!fFirstTileDone || fUseHWResizer) && fIsSampleDecode == false)
-		{
-			if (expectedStride > dstRowBytes && expectedStride / fSwizzler->sampleX() == dstRowBytes)
-			{
-				fIonBufferStorage->reset(dstRowBytes * fDecoderMgr->dinfo()->output_height / fSwizzler->sampleX());
-				fSampleDecodeY = 0;
-				fIsSampleDecode = true;
-				fFirstTileDone = true;
-				fUseHWResizer = false;
-				SkCodecPrintf("SkJpegCodec::onGetScanlines SampleDecode region(%d, %d), size %d, tmpBuffer %p, dstAddr %p\n",
-					fDecoderMgr->dinfo()->output_width / fSwizzler->sampleX(),
-					fDecoderMgr->dinfo()->output_height / fSwizzler->sampleX(),
-					dstRowBytes * fDecoderMgr->dinfo()->output_height / fSwizzler->sampleX(),
-					fIonBufferStorage->getAddr(), dst);
-			}
-			else
-			{
-				fIonBufferStorage->reset(dstRowBytes * count);
-				fIsSampleDecode = false;
-			}
-			tmpBuffer = (JSAMPLE*) fIonBufferStorage->getAddr();
-		}
-		else if (fIsSampleDecode == true)
-		{
-			tmpBuffer = ((JSAMPLE*) fIonBufferStorage->getAddr()) + (fSampleDecodeY * dstRowBytes);
-		}
-		else
-		{
-			tmpBuffer = (JSAMPLE*) dst;
-			fFirstTileDone = true;
-			fUseHWResizer = false;
-		}
-		if (fSwizzler) {
-			dstRow = fSwizzleSrcRow;
-		} else {
-			SkASSERT(count == 1 || dstRowBytes >= srcRowBytes);
-    #if defined(MTK_JPEG_HW_REGION_RESIZER)
-			dstRow = tmpBuffer;
-    #else
-			dstRow = (JSAMPLE*) dst;
-    #endif
-		}
-		for (int y = 0; y < count; y++) {
-			uint32_t rowsDecoded = jpeg_read_scanlines(fDecoderMgr->dinfo(), &dstRow, 1);
-			sk_msan_mark_initialized(dstRow, dstRow + srcRowBytes, "skbug.com/4550");
-			if (rowsDecoded != 1) {
-				fDecoderMgr->dinfo()->output_scanline = this->dstInfo().height();
-				if((!fFirstTileDone || fUseHWResizer) || fIsSampleDecode == true)
-				{
-					bool result = false;
-					unsigned long addrOffset =0;
-					if (fIsSampleDecode == false)
-						result = ImgPostProc(tmpBuffer, fIonClientHnd, fIonBufferStorage->getFD(), dst,
-							outputWidth, y, dstRowBytes, fIonBufferStorage->getColor(),
-							fEnTdshp, NULL, fISOSpeedRatings);
-					else
-					{
-						addrOffset = fSampleDecodeY * dstRowBytes;
-						result = ImgPostProc(tmpBuffer - addrOffset, fIonClientHnd,
-							fIonBufferStorage->getFD(), (void*)((unsigned char*)dst - addrOffset),
-							outputWidth / fSwizzler->sampleX(), (fSampleDecodeY + y),
-							dstRowBytes, fIonBufferStorage->getColor(), fEnTdshp, NULL, fISOSpeedRatings);
-						SkCodecPrintf("SkJpegCodec::onGetScanlines ImgPostProc src %p, dst %p, fSampleDecodeY %u\n",
-							tmpBuffer, dst, fSampleDecodeY);
-					}
-					if(!result)
-					{
-						fFirstTileDone = true;
-						SkCodecPrintf("ImgPostProc fail, use default solution, L:%d!!\n", __LINE__);
-						if (fIsSampleDecode == false)
-							memcpy(dst, tmpBuffer, dstRowBytes * y);
-						else
-							memcpy((void*)((unsigned char*)dst - addrOffset), (void*)(tmpBuffer - addrOffset),
-								   dstRowBytes * (fSampleDecodeY + y));
-					}
-					else
-					{
-						fFirstTileDone = true;
-						fUseHWResizer = true;
-						SkCodecPrintf("ImgPostProc successfully, L:%d!!\n", __LINE__);
-					}
-				}
-				return y;
-			}
-			if (fSwizzler) {
-        #if defined(MTK_JPEG_HW_REGION_RESIZER)
-				fSwizzler->swizzle(tmpBuffer, dstRow);
-				if (fIsSampleDecode == false)
-					tmpBuffer = SkTAddOffset<JSAMPLE>(tmpBuffer, dstRowBytes);
-        #else
-				fSwizzler->swizzle(dst, dstRow);
-				if (fIsSampleDecode == false)
-					dst = SkTAddOffset<JSAMPLE>(dst, dstRowBytes);
-        #endif
-			} else {
-				dstRow = SkTAddOffset<JSAMPLE>(dstRow, dstRowBytes);
-			}
-		}
-		if((!fFirstTileDone || fUseHWResizer) ||
-			(fIsSampleDecode == true && (fSampleDecodeY + count) == fDecoderMgr->dinfo()->output_height / fSwizzler->sampleX()))
-		{
-			bool result = false;
-			unsigned long addrOffset = 0;
-			if (fIsSampleDecode == false)
-				result = ImgPostProc(tmpBuffer, fIonClientHnd, fIonBufferStorage->getFD(), dst,
-					outputWidth, count, dstRowBytes, fIonBufferStorage->getColor(),
-					fEnTdshp, NULL, fISOSpeedRatings);
-			else
-			{
-				addrOffset = fSampleDecodeY * dstRowBytes;
-				result = ImgPostProc(tmpBuffer - addrOffset, fIonClientHnd,
-					fIonBufferStorage->getFD(), (void*)((unsigned char*)dst - addrOffset),
-					outputWidth / fSwizzler->sampleX(), (fSampleDecodeY + count),
-					dstRowBytes, fIonBufferStorage->getColor(), fEnTdshp, NULL, fISOSpeedRatings);
-				SkCodecPrintf("SkJpegCodec::onGetScanlines ImgPostProc src %p, dst %p, fSampleDecodeY %u\n",
-					tmpBuffer, dst, fSampleDecodeY);
-			}
-			if(!result)
-			{
-				fFirstTileDone = true;
-				SkCodecPrintf("ImgPostProc fail, use default solution, L:%d!!\n", __LINE__);
-				if (fIsSampleDecode == false)
-					memcpy(dst, tmpBuffer, dstRowBytes * count);
-				else
-					memcpy((void*)((unsigned char*)dst - addrOffset), (void*)(tmpBuffer - addrOffset),
-						   dstRowBytes * (fSampleDecodeY + count));
-			}
-			else
-			{
-				fFirstTileDone = true;
-				fUseHWResizer = true;
-				SkCodecPrintf("ImgPostProc successfully, L:%d!!\n", __LINE__);
-			}
-		}
-		else if (fIsSampleDecode == true)
-		{
-			fSampleDecodeY = fSampleDecodeY + count;
-		}
-		return count;
-}
-#endif
 int SkJpegCodec::onGetScanlines(void* dst, int count, size_t dstRowBytes) {
 #if defined(MTK_JPEG_HW_REGION_RESIZER)
-	int rows = onGetHWScanlines(dst, count, dstRowBytes);
+    int rows = this->readRows_MTK(this->dstInfo(), dst, dstRowBytes, count, this->options());
 #else
     int rows = this->readRows(this->dstInfo(), dst, dstRowBytes, count, this->options());
-#endif	
+#endif
     if (rows < count) {
         // This allows us to skip calling jpeg_finish_decompress().
         fDecoderMgr->dinfo()->output_scanline = this->dstInfo().height();

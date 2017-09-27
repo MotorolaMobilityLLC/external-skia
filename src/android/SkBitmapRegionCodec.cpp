@@ -116,6 +116,10 @@ bool SkBitmapRegionCodec::decodeRegion(SkBitmap* bitmap, SkBRDAllocator* allocat
     options.fColorCount = &maxColors;
     options.fZeroInitialized = zeroInit;
     void* dst = bitmap->getAddr(scaledOutX, scaledOutY);
+    SkCodecPrintf("decodeRegion sample %d, bitmap(%d %d %d), subset(%d %d %d %d), decodeInfo(%d %d %d)\n",
+        sampleSize, bitmap->width(), bitmap->height(), bitmap->rowBytes(),
+        subset.x(), subset.y(), subset.width(), subset.height(),
+        decodeInfo.width(), decodeInfo.height(), decodeInfo.colorType());
 
     SkCodec::Result result = fCodec->getAndroidPixels(decodeInfo, dst, bitmap->rowBytes(),
             &options);
