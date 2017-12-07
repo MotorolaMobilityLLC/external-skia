@@ -184,6 +184,7 @@ SkCodec::Result SkSampledCodec::sampledDecode(const SkImageInfo& info, void* pix
     int subsetY = 0;
     int subsetWidth = nativeSize.width();
     int subsetHeight = nativeSize.height();
+    sampledOptions.fRegionHeight = 0x0;
     if (options.fSubset) {
         // We will need to know about subsetting in the y-dimension in order to use the
         // scanline decoder.
@@ -202,6 +203,7 @@ SkCodec::Result SkSampledCodec::sampledDecode(const SkImageInfo& info, void* pix
         // The scanline decoder only needs to be aware of subsetting in the x-dimension.
         subset.setXYWH(subsetX, 0, subsetWidth, nativeSize.height());
         sampledOptions.fSubset = &subset;
+        sampledOptions.fRegionHeight = subsetHeight;
     }
 
     // Since we guarantee that output dimensions are always at least one (even if the sampleSize

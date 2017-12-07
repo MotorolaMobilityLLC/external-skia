@@ -250,6 +250,7 @@ public:
             , fFrameIndex(0)
             , fHasPriorFrame(false)
             , fPremulBehavior(SkTransferFunctionBehavior::kRespect)
+            , fRegionHeight(0)
         {}
 
         ZeroInitialized            fZeroInitialized;
@@ -305,6 +306,12 @@ public:
          *  we will always do a legacy premultiply.
          */
         SkTransferFunctionBehavior fPremulBehavior;
+
+        /**
+         *  MTK proprietary feature PQ required parameter, this is for sampleDecode
+         *  To do the sampleDecode correctly, region height is required
+         */
+        unsigned int fRegionHeight;
     };
 
     /**

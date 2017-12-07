@@ -40,6 +40,7 @@ func mtkJpegEnhanceDefaults(ctx android.LoadHookContext) {
 			legacysharedlibs = append(legacysharedlibs, "libmhalImageCodec")
 			legacysharedlibs = append(legacysharedlibs, "libdpframework")
 			legacysharedlibs = append(legacysharedlibs, "libion_mtk")
+			legacysharedlibs = append(legacysharedlibs, "libmtkjpeg")
 		}
 	} 
 	
