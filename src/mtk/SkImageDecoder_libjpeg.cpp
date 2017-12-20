@@ -726,7 +726,7 @@ bool store_raw_data(SkBitmap* bm, SkColorType colorType)
 class SkIonMalloc
 {
 public:
-    SkIonMalloc(int ionClientHnd): fIonAllocHnd(-1), fAddr(nullptr), fShareFD(-1) 
+    SkIonMalloc(int ionClientHnd): fIonAllocHnd(-1), fAddr(nullptr), fShareFD(-1), fSize(0)
     {
         if (ionClientHnd < 0)
         {
