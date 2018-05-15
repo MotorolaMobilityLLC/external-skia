@@ -107,10 +107,10 @@ public:
         // Notification from blitter::blitMask in case we need to see the non-alpha channels
         virtual void set3DMask(const SkMask*) {}
 
-    protected:
+    //protected:
         // Reference to shader, so we don't have to dupe information.
         const SkShaderBase& fShader;
-
+    protected:
         uint8_t         getPaintAlpha() const { return fPaintAlpha; }
         const SkMatrix& getTotalInverse() const { return fTotalInverse; }
         const SkMatrix& getCTM() const { return fCTM; }

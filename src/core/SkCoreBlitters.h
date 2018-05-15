@@ -125,13 +125,13 @@ public:
     void blitAntiH(int x, int y, const SkAlpha[], const int16_t[]) override;
     void blitMask(const SkMask&, const SkIRect&) override;
 
-private:
+protected:
     SkXfermode*         fXfermode;
     SkPMColor*          fBuffer;
     SkBlitRow::Proc32   fProc32;
     SkBlitRow::Proc32   fProc32Blend;
     bool                fShadeDirectlyIntoDevice;
-
+private:
     // illegal
     SkARGB32_Shader_Blitter& operator=(const SkARGB32_Shader_Blitter&);
 

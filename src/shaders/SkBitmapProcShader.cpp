@@ -17,7 +17,7 @@ static bool only_scale_and_translate(const SkMatrix& matrix) {
     unsigned mask = SkMatrix::kTranslate_Mask | SkMatrix::kScale_Mask;
     return (matrix.getType() & ~mask) == 0;
 }
-
+#if 0
 class BitmapProcInfoContext : public SkShaderBase::Context {
 public:
     // The info has been allocated elsewhere, but we are responsible for calling its destructor.
@@ -90,7 +90,55 @@ private:
 
     typedef BitmapProcInfoContext INHERITED;
 };
+#else
+BitmapProcInfoContext::BitmapProcInfoContext(const SkShaderBase& shader,
+                            const SkShaderBase::ContextRec& rec,
+                            SkBitmapProcInfo* info)
+    : INHERITED(shader, rec)
+    , fInfo(info)
+{
+    fFlags = 0;
+    if (fInfo->fPixmap.isOpaque() && (255 == this->getPaintAlpha())) {
+        fFlags |= SkShaderBase::kOpaqueAlpha_Flag;
+    }
 
+    if (1 == fInfo->fPixmap.height() && only_scale_and_translate(this->getTotalInverse())) {
+        fFlags |= SkShaderBase::kConstInY32_Flag;
+    }
+}
+
+void BitmapProcShaderContext::shadeSpan(int x, int y, SkPMColor dstC[], int count) {
+    const SkBitmapProcState& state = *fState;
+    if (state.getShaderProc32()) {
+        state.getShaderProc32()(&state, x, y, dstC, count);
+        return;
+    }
+
+    const int BUF_MAX = 128;
+    uint32_t buffer[BUF_MAX];
+    SkBitmapProcState::MatrixProc   mproc = state.getMatrixProc();
+    SkBitmapProcState::SampleProc32 sproc = state.getSampleProc32();
+    const int max = state.maxCountForBufferSize(sizeof(buffer[0]) * BUF_MAX);
+
+    SkASSERT(state.fPixmap.addr());
+
+    for (;;) {
+        int n = SkTMin(count, max);
+        SkASSERT(n > 0 && n < BUF_MAX*2);
+        mproc(state, buffer, n, x, y);
+        sproc(state, buffer, n, dstC);
+
+        if ((count -= n) == 0) {
+            break;
+        }
+        SkASSERT(count > 0);
+        x += n;
+        dstC += n;
+    }
+}
+
+
+#endif
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 SkShaderBase::Context* SkBitmapProcLegacyShader::MakeContext(

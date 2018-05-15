@@ -21,6 +21,10 @@
 #include "SkTLazy.h"
 #include "SkUtils.h"
 #include "SkXfermodeInterpretation.h"
+#ifdef __MULTI_THREADS_OPTIMIZE_2D__
+#include "SkBlitterMTAdapter.h"
+#endif
+
 
 SkBlitter::~SkBlitter() {}
 
@@ -1050,7 +1054,11 @@ SkBlitter* SkBlitter::Choose(const SkPixmap& device,
             SkASSERT(!device.colorSpace());
 
             if (shader) {
+#ifdef __MULTI_THREADS_OPTIMIZE_2D__
+                blitter = alloc->make<SkBlitterMTAdapter>(device, *paint, shaderContext);
+#else
                 blitter = alloc->make<SkARGB32_Shader_Blitter>(device, *paint, shaderContext);
+#endif
             } else if (paint->getColor() == SK_ColorBLACK) {
                 blitter = alloc->make<SkARGB32_Black_Blitter>(device, *paint);
             } else if (paint->getAlpha() == 0xFF) {
@@ -1060,6 +1068,7 @@ SkBlitter* SkBlitter::Choose(const SkPixmap& device,
             }
             break;
         case kRGB_565_SkColorType:
+
             if (shader && SkRGB565_Shader_Blitter::Supports(device, *paint)) {
                 blitter = alloc->make<SkRGB565_Shader_Blitter>(device, *paint, shaderContext);
             } else {

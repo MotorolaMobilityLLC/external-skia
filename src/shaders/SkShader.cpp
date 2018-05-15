@@ -152,6 +152,17 @@ const SkMatrix& SkShader::getLocalMatrix() const {
 bool SkShader::isABitmap(SkBitmap* outTexture, SkMatrix* outMatrix, TileMode xy[2]) const {
     return  as_SB(this)->onIsABitmap(outTexture, outMatrix, xy);
 }
+
+/*mtk enhancement*/
+bool SkShader::getOrigBitmapInfo(int &w, int &h) const {
+    SkBitmap bm;
+    if (!isABitmap(&bm, nullptr, nullptr))
+        return false;
+    w = bm.pixelRef()->width();
+    h = bm.pixelRef()->height();
+    return true;
+}
+
 #endif
 
 SkImage* SkShader::isAImage(SkMatrix* localMatrix, TileMode xy[2]) const {

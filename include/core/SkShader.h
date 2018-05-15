@@ -93,6 +93,8 @@ public:
     bool isABitmap() const {
         return this->isABitmap(nullptr, nullptr, nullptr);
     }
+
+    bool getOrigBitmapInfo(int &w, int &h) const;
 #endif
 
     /**
