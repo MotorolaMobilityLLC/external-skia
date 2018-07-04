@@ -268,6 +268,12 @@ public:
     }
 
     SkCodec* codec() const { return fCodec.get(); }
+	
+#ifdef MTK_IMAGE_ENABLE_PQ_FOR_JPEG
+    void setPostProcFlag(int flag) {
+        codec()->setPostProcFlag(flag);
+    }
+#endif
 
 protected:
     SkAndroidCodec(SkCodec*, ExifOrientationBehavior = ExifOrientationBehavior::kIgnore);

@@ -14,6 +14,9 @@
 SkBitmapRegionCodec::SkBitmapRegionCodec(SkAndroidCodec* codec)
     : INHERITED(codec->getInfo().width(), codec->getInfo().height())
     , fCodec(codec)
+#ifdef MTK_IMAGE_ENABLE_PQ_FOR_JPEG
+    , fPostProc(0)
+#endif
 {}
 
 bool SkBitmapRegionCodec::decodeRegion(SkBitmap* bitmap, SkBRDAllocator* allocator,
@@ -103,6 +106,11 @@ bool SkBitmapRegionCodec::decodeRegion(SkBitmap* bitmap, SkBRDAllocator* allocat
     options.fSubset = &subset;
     options.fZeroInitialized = zeroInit;
     void* dst = bitmap->getAddr(scaledOutX, scaledOutY);
+
+	SkCodecPrintf("decodeRegion sample %d, bitmap(%d %d %d), subset(%d %d %d %d), decodeInfo(%d %d %d)\n",
+        sampleSize, bitmap->width(), bitmap->height(), bitmap->rowBytes(),
+        subset.x(), subset.y(), subset.width(), subset.height(),
+        decodeInfo.width(), decodeInfo.height(), decodeInfo.colorType());
 
     SkCodec::Result result = fCodec->getAndroidPixels(decodeInfo, dst, bitmap->rowBytes(),
             &options);
