@@ -977,6 +977,9 @@ cc_defaults {
         "libnativewindow",
         "libgraphics2d_ext",
 		"libjpeg-alpha",
+		"libion_mtk_sys",
+		"libdpframework_mtk",
+		"libion",
     ],
     static_libs: [
         "libarect",

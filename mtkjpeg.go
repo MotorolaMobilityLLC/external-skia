@@ -36,10 +36,10 @@ func mtkJpegEnhanceSkiaDefaults(ctx android.LoadHookContext) {
 
 			//jpeg flags
 			//p.Target.Android.Cflags = append(p.Target.Android.Cflags, "-DMTK_JPEG_HW_DECODER")
-			//p.Target.Android.Cflags = append(p.Target.Android.Cflags, "-DMTK_JPEG_HW_REGION_RESIZER")
+			p.Target.Android.Cflags = append(p.Target.Android.Cflags, "-DMTK_JPEG_HW_REGION_RESIZER")
 			p.Target.Android.Cflags = append(p.Target.Android.Cflags, "-DMTK_SKIA_MULTI_THREAD_JPEG_REGION")
 			p.Target.Android.Cflags = append(p.Target.Android.Cflags, "-DSK_JPEG_INDEX_SUPPORTED_MTK")
-			//p.Target.Android.Cflags = append(p.Target.Android.Cflags, "-DMTK_IMAGE_ENABLE_PQ_FOR_JPEG")
+			p.Target.Android.Cflags = append(p.Target.Android.Cflags, "-DMTK_IMAGE_ENABLE_PQ_FOR_JPEG")
 
 			//graphics local dirs
 			localIncludeDirs = append(localIncludeDirs, "mtk_opt/include/adapter")
@@ -49,11 +49,12 @@ func mtkJpegEnhanceSkiaDefaults(ctx android.LoadHookContext) {
 			localIncludeDirs = append(localIncludeDirs, "include/mtk/")
 
 			//jpeg non-local dirs
-			includeDirs = append(includeDirs, "system/core/libion/include/")
+			includeDirs = append(includeDirs, "system/core/libion/include/")		//ion/ion.h
 			includeDirs = append(includeDirs, "system/core/include/utils/")
-			includeDirs = append(includeDirs, "vendor/mediatek/proprietary/external/libion_mtk/include/")
-			includeDirs = append(includeDirs, "device/mediatek/common/kernel-headers/")
+			includeDirs = append(includeDirs, "vendor/mediatek/proprietary/external/")	//libion_mtk/include/ion.h
+			includeDirs = append(includeDirs, "device/mediatek/common/kernel-headers/")		//linux/mtk_ion.h
 			includeDirs = append(includeDirs, "vendor/mediatek/proprietary/external/libjpeg-alpha/include/")
+			includeDirs = append(includeDirs, "vendor/mediatek/proprietary/hardware/dpframework/include/")
 
 			//graphics srcs
 			srcs = append(srcs, "mtk_opt/src/adapter/SkBlitterAdapterHandler.cpp")
@@ -73,7 +74,7 @@ func mtkJpegEnhanceSkiaDefaults(ctx android.LoadHookContext) {
 			//jpeg legacy shared libs
 			sharedlibs = append(sharedlibs, "libion")
 			//sharedlibs = append(sharedlibs, "libmhalImageCodec_sys")
-			//sharedlibs = append(sharedlibs, "libdpframework_mtk")
+			sharedlibs = append(sharedlibs, "libdpframework_mtk")
 			sharedlibs = append(sharedlibs, "libion_mtk_sys")
 			sharedlibs = append(sharedlibs, "libjpeg-alpha")
 

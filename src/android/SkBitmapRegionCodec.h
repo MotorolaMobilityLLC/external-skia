@@ -50,7 +50,7 @@ private:
     typedef SkBitmapRegionDecoder INHERITED;
 
 #ifdef MTK_IMAGE_ENABLE_PQ_FOR_JPEG
-	int                           fPostProc;
+	//int                           fPostProc;		//unused
 #endif
 
 };

@@ -15,7 +15,7 @@ SkBitmapRegionCodec::SkBitmapRegionCodec(SkAndroidCodec* codec)
     : INHERITED(codec->getInfo().width(), codec->getInfo().height())
     , fCodec(codec)
 #ifdef MTK_IMAGE_ENABLE_PQ_FOR_JPEG
-    , fPostProc(0)
+    //, fPostProc(0)		//does not name a non-stativ data member or base class
 #endif
 {}
 
