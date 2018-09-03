@@ -139,6 +139,9 @@ SkCodec::SkCodec(int width, int height, const SkEncodedInfo& info,
     , fOptions()
     , fCurrScanline(-1)
     , fStartedIncrementalDecode(false)
+#ifdef MTK_IMAGE_ENABLE_PQ_FOR_JPEG
+	, fPostProc(0)
+#endif
 {}
 
 SkCodec::SkCodec(const SkEncodedInfo& info, const SkImageInfo& imageInfo,
@@ -154,6 +157,9 @@ SkCodec::SkCodec(const SkEncodedInfo& info, const SkImageInfo& imageInfo,
     , fOptions()
     , fCurrScanline(-1)
     , fStartedIncrementalDecode(false)
+#ifdef MTK_IMAGE_ENABLE_PQ_FOR_JPEG
+	, fPostProc(0)
+#endif
 {}
 
 SkCodec::~SkCodec() {}

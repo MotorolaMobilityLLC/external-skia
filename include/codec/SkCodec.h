@@ -254,6 +254,7 @@ public:
             , fFrameIndex(0)
             , fPriorFrame(kNone)
             , fPremulBehavior(SkTransferFunctionBehavior::kRespect)
+			, fRegionHeight(0)
         {}
 
         ZeroInitialized            fZeroInitialized;
@@ -305,6 +306,12 @@ public:
          *  we will always do a legacy premultiply.
          */
         SkTransferFunctionBehavior fPremulBehavior;
+
+		/**
+		 *  MTK proprietary feature PQ required parameter, this is for sampleDecode
+		 *  To do the sampleDecode correctly, region height is required
+		 */
+        unsigned int               fRegionHeight;
     };
 
     /**
@@ -664,6 +671,11 @@ public:
         return this->onGetRepetitionCount();
     }
 
+#ifdef MTK_IMAGE_ENABLE_PQ_FOR_JPEG
+    int getPostProcFlag() const { return fPostProc; }
+    void setPostProcFlag(int flag) { fPostProc = flag;}
+#endif
+
 protected:
     const SkEncodedInfo& getEncodedInfo() const { return fEncodedInfo; }
 
@@ -846,6 +858,10 @@ private:
     int                                fCurrScanline;
 
     bool                               fStartedIncrementalDecode;
+
+#ifdef MTK_IMAGE_ENABLE_PQ_FOR_JPEG
+    int                                fPostProc;
+#endif
 
     /**
      *  Return whether {srcColor, srcIsOpaque, srcCS} can convert to dst.
