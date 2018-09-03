@@ -10,7 +10,7 @@ bootstrap_go_package {
         "soong-android",
         "soong-cc",
         "soong-genrule",
-	"soong-android-mediatek"
+	    "soong-android-mediatek"
     ],
     srcs: [
         "mtkjpeg.go",
@@ -77,7 +77,7 @@ cc_library_static {
         "-Wpointer-arith",
         "-Wsign-compare",
         "-Wvla",
-        "-fvisibility=hidden",
+        //"-fvisibility=hidden",
     ],
 
     cppflags:[
@@ -171,7 +171,6 @@ cc_library_static {
         "src/codec/SkGifCodec.cpp",
         "src/codec/SkHeifCodec.cpp",
         "src/codec/SkIcoCodec.cpp",
-        "src/codec/SkJpegCodec.cpp",
         "src/codec/SkJpegDecoderMgr.cpp",
         "src/codec/SkJpegUtility.cpp",
         "src/codec/SkMaskSwizzler.cpp",
@@ -976,7 +975,8 @@ cc_defaults {
         "libz",
         "libcutils",
         "libnativewindow",
-	"libgraphics2d_ext",
+        "libgraphics2d_ext",
+		"libjpeg-alpha",
     ],
     static_libs: [
         "libarect",
@@ -1007,7 +1007,8 @@ cc_test {
     name: "skia_dm",
 
     defaults: [
-        "skia_tool_deps"
+        "skia_tool_deps",
+		"mtk_jpeg_enhance_skia_defaults",
     ],
 
     local_include_dirs: [
@@ -1833,7 +1834,8 @@ cc_test {
     name: "skia_nanobench",
 
     defaults: [
-        "skia_tool_deps"
+        "skia_tool_deps",
+		"mtk_jpeg_enhance_skia_defaults",
     ],
 
     local_include_dirs: [

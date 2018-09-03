@@ -39,11 +39,19 @@ public:
         return fCodec->computeOutputColorSpace(outputColorType, prefColorSpace);
     }
 
+#ifdef MTK_IMAGE_ENABLE_PQ_FOR_JPEG
+    void setPostProcFlag(int flag) override { fCodec->setPostProcFlag(flag);}
+#endif
+
 private:
 
     std::unique_ptr<SkAndroidCodec> fCodec;
 
     typedef SkBitmapRegionDecoder INHERITED;
+
+#ifdef MTK_IMAGE_ENABLE_PQ_FOR_JPEG
+	int                           fPostProc;
+#endif
 
 };
 #endif  // SkBitmapRegionCodec_DEFINED
