@@ -439,6 +439,15 @@ public:
         SkDEBUGCODE(fReadHeaderSucceeded = success;)
         return success;
     }
+      /**
+     *  reset stream offset in fSrcMgr
+     */
+
+     void resetStream(){
+		//SkDebugf("resetStream. reset bytes_in_buffer from %d to %d, and move next_input_byte pointer from %p to %p", fSrcMgr.bytes_in_buffer, fSrcMgr.current_offset, fSrcMgr.next_input_byte, fSrcMgr.start_input_byte);
+		fSrcMgr.bytes_in_buffer = fSrcMgr.current_offset;
+		fSrcMgr.next_input_byte = fSrcMgr.start_input_byte;
+	}
 
     jpeg_decompress_struct_ALPHA* cinfo() { return &fCInfo; }
 
@@ -1638,7 +1647,9 @@ bool SkJPEGImageDecoder::onBuildTileIndex(SkStreamRewindable* stream, int *width
     }
 
     // destroy the cinfo used to create/build the huffman index
-    imageIndex->destroyInfo();
+   imageIndex->destroyInfo();
+
+   imageIndex->resetStream(); //add for reset stream offset
 
     // Init decoder to image decode mode
     if (!imageIndex->initializeInfoAndReadHeader()) {
@@ -2022,21 +2033,22 @@ bool SkJPEGImageDecoder::onDecodeSubset(SkBitmap* bm, const SkIRect& region, int
     }
 #endif
 
-#ifdef MTK_SKIA_MULTI_THREAD_JPEG_REGION 
+#ifdef MTK_SKIA_MULTI_THREAD_JPEG_REGION
 
     JpgLibAutoClean auto_clean_cinfo ;
     JpgStreamAutoClean auto_clean_stream;
     jpeg_decompress_struct_ALPHA *cinfo = nullptr;
     SkStream *stream ;
     skjpeg_source_mgr_MTK *sk_stream = nullptr;
-      
+
     if(fImageIndex->mtkStream){
         //SkDebugf("MTR_JPEG: mtkStream  length = %d ,  L:%d!!\n", fImageIndex->mtkStream->getLength(),__LINE__);
-      
-        stream = new SkMemoryStream(fImageIndex->mtkStream->getMemoryBase() ,fImageIndex->mtkStream->getLength() , true);
-       
-        sk_stream = new skjpeg_source_mgr_MTK(stream, this); 
-       
+
+        //stream = new SkMemoryStream(fImageIndex->mtkStream->getMemoryBase() ,fImageIndex->mtkStream->getLength() , true);
+        stream = fImageIndex->mtkStream->duplicate().release();
+
+        sk_stream = new skjpeg_source_mgr_MTK(stream, this);
+
         cinfo = (jpeg_decompress_struct_ALPHA *)malloc(sizeof(struct jpeg_decompress_struct_ALPHA));
         memset(cinfo, 0, sizeof(struct jpeg_decompress_struct_ALPHA));
         auto_clean_cinfo.set(cinfo);

@@ -1473,6 +1473,61 @@ SkCodec::Result SkJpegCodec::onGetPixels(const SkImageInfo& dstInfo,
     dinfo->do_block_smoothing = 0;
 #endif
 
+#if defined(MTK_JPEG_HW_REGION_RESIZER)
+    if (fFirstTileDone == false)
+    {
+        long u4PQOpt;
+        char value[PROPERTY_VALUE_MAX];
+
+        // property control for PQ flag
+        property_get("jpegDecode.forceEnable.PQ", value, "-1");
+        u4PQOpt = atol(value);
+        if (-1 == u4PQOpt)
+            fEnTdshp = (this->getPostProcFlag()) & 0x1;
+        else if (0 == u4PQOpt)
+            fEnTdshp = 0x0;
+        else
+            fEnTdshp = 0x1;
+
+        if (!fEnTdshp)
+        {
+            fFirstTileDone = true;
+            fUseHWResizer = false;
+        }
+
+    }
+    if (fEnTdshp && fISOSpeedRatings == -1)
+    {
+        SkStream* stream = this->stream();
+        size_t curStreamPosition = stream->getPosition();
+        SkAutoTMalloc<uint8_t> tmpStorage;
+        // record the stream position in order to restore when we need to use SW decoder
+        if (stream->hasPosition() && stream->rewind())
+        {
+            tmpStorage.reset(MAX_APP1_HEADER_SIZE);
+            size_t bytes_read = stream->read(tmpStorage.get(), MAX_APP1_HEADER_SIZE);
+            fISOSpeedRatings = getISOSpeedRatings(tmpStorage.get(), bytes_read);
+
+            // restore stream position and use original SW decoder
+            stream->rewind();
+            if (curStreamPosition != 0 && !stream->seek(curStreamPosition))
+            {
+                SkCodecPrintf("onGetPixels stream seek fail!");
+                return kCouldNotRewind;
+            }
+        }
+    }
+    SkCodecPrintf("SkJpegCodec::onGetPixels fEnTdshp %d fISOSpeedRatings %d!\n", fEnTdshp, fISOSpeedRatings);
+
+    if(!fFirstTileDone || fUseHWResizer)
+    {
+        if (!fIonBufferStorage)
+            fIonBufferStorage = new SkIonMalloc(fIonClientHnd);
+        if (fIonBufferStorage)
+            fIonBufferStorage->setColor(dstInfo.colorType());
+    }
+#endif
+
     // Set the jump location for libjpeg errors
     skjpeg_error_mgr_MTK::AutoPushJmpBuf jmp(fDecoderMgr->errorMgr_MTK());
     if (setjmp(jmp)) {
@@ -1499,7 +1554,7 @@ SkCodec::Result SkJpegCodec::onGetPixels(const SkImageInfo& dstInfo,
 
     this->allocateStorage(dstInfo);
 
-    int rows = this->readRows(dstInfo, dst, dstRowBytes, dstInfo.height(), options);
+    int rows = this->readRows_MTK(dstInfo, dst, dstRowBytes, dstInfo.height(), options);
     if (rows < dstInfo.height()) {
         *rowsDecoded = rows;
         return fDecoderMgr->returnFailure_MTK("Incomplete image data", kIncompleteInput);
