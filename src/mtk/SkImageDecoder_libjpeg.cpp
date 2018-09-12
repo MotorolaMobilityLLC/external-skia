@@ -1585,12 +1585,9 @@ static bool getEncodedColor(jpeg_decompress_struct_ALPHA* cinfo, SkEncodedInfo::
 
 bool SkJPEGImageDecoder::onBuildTileIndex(SkStreamRewindable* stream, int *width, int *height) {
 
-#ifdef MTK_JPEG_HW_DECODER
+#ifdef MTK_SKIA_MULTI_THREAD_JPEG_REGION
     fFirstTileDone = false;
     fUseHWResizer = false;
-#endif
-
-#ifdef MTK_SKIA_MULTI_THREAD_JPEG_REGION
 
     size_t length = stream->getLength();
     if (length <= 0 ) {
@@ -1598,7 +1595,7 @@ bool SkJPEGImageDecoder::onBuildTileIndex(SkStreamRewindable* stream, int *width
     }
 
     SkAutoTMalloc<uint8_t> allocMemory(length);
-    
+
 //    stream->rewind();
     stream->read(allocMemory.get(), length) ;
 #ifdef MTK_JPEG_HW_DECODER

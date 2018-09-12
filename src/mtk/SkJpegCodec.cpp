@@ -1463,7 +1463,7 @@ SkCodec::Result SkJpegCodec::onGetPixels(const SkImageInfo& dstInfo,
     // Get a pointer to the decompress info since we will use it quite frequently
     jpeg_decompress_struct_ALPHA* dinfo = fDecoderMgr->dinfo_MTK();
 
-#if defined(MTK_JPEG_HW_DECODER)
+#if defined(MTK_JPEG_HW_REGION_RESIZER)
     /* this gives about 30% performance improvement. In theory it may
        reduce the visual quality, in practice I'm not seeing a difference
      */
@@ -1471,9 +1471,7 @@ SkCodec::Result SkJpegCodec::onGetPixels(const SkImageInfo& dstInfo,
 
     /* this gives another few percents */
     dinfo->do_block_smoothing = 0;
-#endif
 
-#if defined(MTK_JPEG_HW_REGION_RESIZER)
     if (fFirstTileDone == false)
     {
         long u4PQOpt;
