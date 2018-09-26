@@ -18,9 +18,12 @@
 
 #if defined(MTK_JPEG_HW_DECODER) || defined(MTK_JPEG_HW_REGION_RESIZER)
 #include <sys/mman.h>
-#include <ion.h>
+#include <libion_mtk/include/ion.h>
 #include <ion/ion.h>
-#include <linux/mtk_ion.h>
+//#include <linux/mtk_ion.h>
+
+#define ION_HEAP_MULTIMEDIA_MASK (1 << 10)
+
 class SkIonMalloc
 {
 public:
@@ -211,7 +214,7 @@ private:
             JpegDecoderMgr_MTK* decoderMgr, sk_sp<SkColorSpace> colorSpace, SkEncodedOrigin origin);
 
 #if defined(MTK_JPEG_HW_DECODER) || defined(MTK_JPEG_HW_REGION_RESIZER)
-    ~SkJpegCodec();
+    ~SkJpegCodec() override;
 #endif
 
     /*

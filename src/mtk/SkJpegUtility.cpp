@@ -209,6 +209,20 @@ skjpeg_source_mgr_MTK::skjpeg_source_mgr_MTK(SkStream* stream, SkImageDecoder* d
     : fStream(stream)
     , fDecoder(decoder) {
 
+    if (stream->hasLength() && stream->getMemoryBase()) {
+        init_source = sk_init_mem_source_MTK;
+        fill_input_buffer = sk_fill_mem_input_buffer_MTK;
+        skip_input_data = sk_skip_mem_input_data_MTK;
+        resync_to_restart = jpeg_resync_to_restart_ALPHA;
+        term_source = sk_term_source_MTK;
+        bytes_in_buffer = static_cast<size_t>(stream->getLength());
+        next_input_byte = static_cast<const JOCTET_ALPHA*>(stream->getMemoryBase());
+#ifdef SK_JPEG_INDEX_SUPPORTED_MTK
+        seek_input_data = NULL;
+        current_offset = static_cast<size_t>(stream->getLength());
+        start_input_byte = static_cast<const JOCTET_ALPHA*>(stream->getMemoryBase());
+#endif
+    }else{
     init_source = sk_init_source_MTK;
     fill_input_buffer = sk_fill_input_buffer_MTK;
     skip_input_data = sk_skip_input_data_MTK;
@@ -217,6 +231,7 @@ skjpeg_source_mgr_MTK::skjpeg_source_mgr_MTK(SkStream* stream, SkImageDecoder* d
 #ifdef SK_JPEG_INDEX_SUPPORTED_MTK
     seek_input_data = sk_seek_input_data_MTK;
 #endif
+    }
 //    SkDebugf("**************** use memorybase %p %d\n", fMemoryBase, fMemoryBaseSize);
 }
 
@@ -236,11 +251,17 @@ skjpeg_source_mgr_MTK::skjpeg_source_mgr_MTK(SkStream* stream)
         term_source = sk_term_source_MTK;
         bytes_in_buffer = static_cast<size_t>(stream->getLength());
         next_input_byte = static_cast<const JOCTET_ALPHA*>(stream->getMemoryBase());
+#ifdef SK_JPEG_INDEX_SUPPORTED_MTK
+        seek_input_data = NULL;
+        current_offset = static_cast<size_t>(stream->getLength());
+        start_input_byte = static_cast<const JOCTET_ALPHA*>(stream->getMemoryBase());
+#endif
     } else {
         init_source = sk_init_buffered_source_MTK;
         fill_input_buffer = sk_fill_buffered_input_buffer_MTK;
         skip_input_data = sk_skip_buffered_input_data_MTK;
         resync_to_restart = jpeg_resync_to_restart_ALPHA;
         term_source = sk_term_source_MTK;
+        seek_input_data = sk_seek_input_data_MTK;
     }
 }

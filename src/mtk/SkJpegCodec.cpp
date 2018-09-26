@@ -190,7 +190,7 @@ unsigned int getISOSpeedRatings(void *buffer, unsigned int size)
                 else
                     EXIFOffset = (*(bufPtr + 8) << 24) + (*(bufPtr + 9) << 16)
                                  + (*(bufPtr + 10) << 8) + *(bufPtr + 11);
-                if (EXIFOffset - ((unsigned long)bufPtr - (unsigned long)TIFFPtr) > bytesLeft) // EXIFOffset is invalid, ignore the next step
+                if (EXIFOffset - ((unsigned long)bufPtr - (unsigned long)TIFFPtr) > (unsigned long)bytesLeft) // EXIFOffset is invalid, ignore the next step
                     return 0;
                 unsigned char *EXIFPtr = TIFFPtr + EXIFOffset;
                 bytesLeft -= (unsigned long)EXIFPtr - (unsigned long)bufPtr;
@@ -219,7 +219,7 @@ unsigned int getISOSpeedRatings(void *buffer, unsigned int size)
                                 + (*(bufPtr + 2) << 8) + *(bufPtr + 3);
 
             // There is no next IFD existed, so abort the searching
-            if (nextIFDOffset == 0 || nextIFDOffset > (bufPtr - TIFFPtr + bytesLeft))
+            if (nextIFDOffset == 0 || nextIFDOffset > (bufPtr - TIFFPtr + (unsigned int)bytesLeft))
                 return 0;
             unsigned char *nextIFDPtr = TIFFPtr + nextIFDOffset;
             bytesLeft -= (unsigned long)nextIFDPtr - (unsigned long)bufPtr;
@@ -231,7 +231,7 @@ unsigned int getISOSpeedRatings(void *buffer, unsigned int size)
     }
     if (findEXIFOffset == true && bytesLeft >= 12)
     {
-        unsigned int ISOSpeedRatings;
+        unsigned int ISOSpeedRatings = 0;
         unsigned int dirEntries;
         if (isIntelAlign == true)
             dirEntries = (*(bufPtr + 1) << 8) + *bufPtr;
@@ -462,8 +462,8 @@ bool ImgPostProc(void* src, int ionClientHnd, int srcFD, void* dst, int width, i
         bltStream.setSrcConfig(width, height, rowBytes, 0, dp_in_fmt, DP_PROFILE_JPEG);
 
         // set dst buffer
-        ion_user_handle_t ionAllocHnd;
-        int dstFD;
+        ion_user_handle_t ionAllocHnd = 0;
+        int dstFD = 0;
         void* dstBuffer = NULL;
         // if srcFD >= 0, need to use ion for buffer allocation
         if (srcFD >= 0)
@@ -1088,7 +1088,8 @@ int SkJpegCodec::readRows(const SkImageInfo& dstInfo, void* dst, size_t rowBytes
 int SkJpegCodec::readRows_MTK(const SkImageInfo& dstInfo, void* dst, size_t rowBytes, int count,
                           const Options& opts) {
     // Set the jump location for libjpeg-turbo errors
-    if (setjmp(fDecoderMgr->getJmpBuf_MTK())) {
+	skjpeg_error_mgr_MTK::AutoPushJmpBuf jmp(fDecoderMgr->errorMgr_MTK());
+    if (setjmp(jmp)) {
         return 0;
     }
 
@@ -1096,7 +1097,7 @@ int SkJpegCodec::readRows_MTK(const SkImageInfo& dstInfo, void* dst, size_t rowB
     int outputWidth = (fSwizzlerSubset.isEmpty()) ? fDecoderMgr->dinfo_MTK()->output_width : fSwizzlerSubset.width();
     int outputHeight = (fSwizzlerSubset.isEmpty()) ? fDecoderMgr->dinfo_MTK()->output_height :
         (fRegionHeight == 0) ? fSwizzlerSubset.height() : fRegionHeight;
-    size_t expectedStride = (fIonBufferStorage)? outputWidth * SkColorTypeBytesPerPixel(fIonBufferStorage->getColor()) : rowBytes;
+    //size_t expectedStride = (fIonBufferStorage)? outputWidth * SkColorTypeBytesPerPixel(fIonBufferStorage->getColor()) : rowBytes;
     //SkCodecPrintf("SkJpegCodec::readRows_MTK %d %d %d %d %d %d %d %d %d %d %d\n", fDecoderMgr->dinfo_MTK()->output_width, fDecoderMgr->dinfo_MTK()->output_height,
     //    fRegionHeight, fSwizzlerSubset.width(), fSwizzlerSubset.height(), fFirstTileDone, fUseHWResizer, fIsSampleDecode, fSampleDecodeY, rowBytes, count);
 
@@ -1235,7 +1236,7 @@ int SkJpegCodec::readRows_MTK(const SkImageInfo& dstInfo, void* dst, size_t rowB
     }
 
     if(fIonBufferStorage && ((!fFirstTileDone || fUseHWResizer) ||
-        (fIsSampleDecode == true && (fSampleDecodeY + count) == (outputHeight / fSwizzler->sampleX()))))
+        (fIsSampleDecode == true && (fSampleDecodeY + count) == (unsigned int)(outputHeight / fSwizzler->sampleX()))))
     {
         bool result = false;
         unsigned long addrOffset = 0;
@@ -1462,7 +1463,7 @@ SkCodec::Result SkJpegCodec::onGetPixels(const SkImageInfo& dstInfo,
     // Get a pointer to the decompress info since we will use it quite frequently
     jpeg_decompress_struct_ALPHA* dinfo = fDecoderMgr->dinfo_MTK();
 
-#if defined(MTK_JPEG_HW_DECODER)
+#if defined(MTK_JPEG_HW_REGION_RESIZER)
     /* this gives about 30% performance improvement. In theory it may
        reduce the visual quality, in practice I'm not seeing a difference
      */
@@ -1470,6 +1471,59 @@ SkCodec::Result SkJpegCodec::onGetPixels(const SkImageInfo& dstInfo,
 
     /* this gives another few percents */
     dinfo->do_block_smoothing = 0;
+
+    if (fFirstTileDone == false)
+    {
+        long u4PQOpt;
+        char value[PROPERTY_VALUE_MAX];
+
+        // property control for PQ flag
+        property_get("jpegDecode.forceEnable.PQ", value, "-1");
+        u4PQOpt = atol(value);
+        if (-1 == u4PQOpt)
+            fEnTdshp = (this->getPostProcFlag()) & 0x1;
+        else if (0 == u4PQOpt)
+            fEnTdshp = 0x0;
+        else
+            fEnTdshp = 0x1;
+
+        if (!fEnTdshp)
+        {
+            fFirstTileDone = true;
+            fUseHWResizer = false;
+        }
+
+    }
+    if (fEnTdshp && fISOSpeedRatings == -1)
+    {
+        SkStream* stream = this->stream();
+        size_t curStreamPosition = stream->getPosition();
+        SkAutoTMalloc<uint8_t> tmpStorage;
+        // record the stream position in order to restore when we need to use SW decoder
+        if (stream->hasPosition() && stream->rewind())
+        {
+            tmpStorage.reset(MAX_APP1_HEADER_SIZE);
+            size_t bytes_read = stream->read(tmpStorage.get(), MAX_APP1_HEADER_SIZE);
+            fISOSpeedRatings = getISOSpeedRatings(tmpStorage.get(), bytes_read);
+
+            // restore stream position and use original SW decoder
+            stream->rewind();
+            if (curStreamPosition != 0 && !stream->seek(curStreamPosition))
+            {
+                SkCodecPrintf("onGetPixels stream seek fail!");
+                return kCouldNotRewind;
+            }
+        }
+    }
+    SkCodecPrintf("SkJpegCodec::onGetPixels fEnTdshp %d fISOSpeedRatings %d!\n", fEnTdshp, fISOSpeedRatings);
+
+    if(!fFirstTileDone || fUseHWResizer)
+    {
+        if (!fIonBufferStorage)
+            fIonBufferStorage = new SkIonMalloc(fIonClientHnd);
+        if (fIonBufferStorage)
+            fIonBufferStorage->setColor(dstInfo.colorType());
+    }
 #endif
 
     // Set the jump location for libjpeg errors
@@ -1498,7 +1552,7 @@ SkCodec::Result SkJpegCodec::onGetPixels(const SkImageInfo& dstInfo,
 
     this->allocateStorage(dstInfo);
 
-    int rows = this->readRows(dstInfo, dst, dstRowBytes, dstInfo.height(), options);
+    int rows = this->readRows_MTK(dstInfo, dst, dstRowBytes, dstInfo.height(), options);
     if (rows < dstInfo.height()) {
         *rowsDecoded = rows;
         return fDecoderMgr->returnFailure_MTK("Incomplete image data", kIncompleteInput);
@@ -1583,7 +1637,7 @@ SkCodec::Result SkJpegCodec::onStartScanlineDecode(const SkImageInfo& dstInfo,
 #if defined(MTK_JPEG_HW_REGION_RESIZER)
     if (fFirstTileDone == false)
     {
-        unsigned long u4PQOpt;
+        long u4PQOpt;
         char value[PROPERTY_VALUE_MAX];
 
         // property control for PQ flag

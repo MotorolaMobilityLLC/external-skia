@@ -30,14 +30,14 @@
 #include <sys/mman.h>
 #include <cutils/ashmem.h>
 
-#ifdef MTK_JPEG_HW_DECODER
+#if defined(MTK_JPEG_HW_REGION_RESIZER) || defined(MTK_JPEG_HW_DECODER)
   #include "DpBlitStream.h" 
-  #define ATRACE_TAG ATRACE_TAG_GRAPHICS
+//  #define ATRACE_TAG ATRACE_TAG_GRAPHICS
   #include "Trace.h"
 
-  #include <ion/ion.h>
-  #include <ion.h>
-  #include <linux/mtk_ion.h>
+//  #include <ion/ion.h>
+  #include <linux/ion.h>
+//  #include <linux/mtk_ion.h>
 #endif
 
 #ifdef SK_BUILD_FOR_ANDROID
@@ -439,6 +439,15 @@ public:
         SkDEBUGCODE(fReadHeaderSucceeded = success;)
         return success;
     }
+      /**
+     *  reset stream offset in fSrcMgr
+     */
+
+     void resetStream(){
+		//SkDebugf("resetStream. reset bytes_in_buffer from %d to %d, and move next_input_byte pointer from %p to %p", fSrcMgr.bytes_in_buffer, fSrcMgr.current_offset, fSrcMgr.next_input_byte, fSrcMgr.start_input_byte);
+		fSrcMgr.bytes_in_buffer = fSrcMgr.current_offset;
+		fSrcMgr.next_input_byte = fSrcMgr.start_input_byte;
+	}
 
     jpeg_decompress_struct_ALPHA* cinfo() { return &fCInfo; }
 
@@ -554,10 +563,10 @@ private:
 
     typedef SkImageDecoder INHERITED;
 
-#ifdef MTK_JPEG_HW_DECODER
+#if defined(MTK_JPEG_HW_DECODER) || defined(MTK_JPEG_HW_REGION_RESIZER)
     bool fFirstTileDone;
     bool fUseHWResizer;
-    int fIonClientHnd;
+    //int fIonClientHnd = 0;
 #endif
 
     double g_mt_start;
@@ -667,10 +676,6 @@ void onReleaseIONBuffer(void* addr, void* context)
     free((void*)info);
 }
 
-extern void* allocateIONBuffer(int ionClientHnd, ion_user_handle_t *ionAllocHnd, int *bufferFD, size_t size);
-
-extern void freeIONBuffer(int ionClientHnd, ion_user_handle_t ionAllocHnd, void* bufferAddr, int bufferFD, size_t size);
-
 int index_file = 0;
 bool store_raw_data(SkBitmap* bm, SkColorType colorType)
 {
@@ -683,6 +688,8 @@ bool store_raw_data(SkBitmap* bm, SkColorType colorType)
     property_get("decode.hw.dump", value, "0");
 
     u4PQOpt = atol(value);
+
+	skBitmapSize_MTK = bm->height() * bm->rowBytes();
 
     if( u4PQOpt == 0) return false;
 
@@ -704,14 +711,14 @@ bool store_raw_data(SkBitmap* bm, SkColorType colorType)
     }
     if(colorType == kRGB_565_SkColorType)
     {
-        fwrite(bm->getPixels(), 1 , bm->getSize(), fp);
+        fwrite(bm->getPixels(), 1 , skBitmapSize_MTK, fp);
         fclose(fp);
         return true;
     }
 
     unsigned char* addr = (unsigned char*)bm->getPixels();
-    SkDebugf("bitmap addr : 0x%x, size : %d ", addr, bm->getSize());
-    for(unsigned int i = 0 ; i < bm->getSize() ; i += 4)
+    SkDebugf("bitmap addr : 0x%x, size : %d ", addr, skBitmapSize_MTK);
+    for(unsigned int i = 0 ; i < skBitmapSize_MTK ; i += 4)
     {
         fprintf(fp, "%c", addr[i]);
         fprintf(fp, "%c", addr[i+1]);
@@ -1578,12 +1585,9 @@ static bool getEncodedColor(jpeg_decompress_struct_ALPHA* cinfo, SkEncodedInfo::
 
 bool SkJPEGImageDecoder::onBuildTileIndex(SkStreamRewindable* stream, int *width, int *height) {
 
-#ifdef MTK_JPEG_HW_DECODER
+#ifdef MTK_SKIA_MULTI_THREAD_JPEG_REGION
     fFirstTileDone = false;
     fUseHWResizer = false;
-#endif
-
-#ifdef MTK_SKIA_MULTI_THREAD_JPEG_REGION
 
     size_t length = stream->getLength();
     if (length <= 0 ) {
@@ -1591,7 +1595,7 @@ bool SkJPEGImageDecoder::onBuildTileIndex(SkStreamRewindable* stream, int *width
     }
 
     SkAutoTMalloc<uint8_t> allocMemory(length);
-    
+
 //    stream->rewind();
     stream->read(allocMemory.get(), length) ;
 #ifdef MTK_JPEG_HW_DECODER
@@ -1640,7 +1644,9 @@ bool SkJPEGImageDecoder::onBuildTileIndex(SkStreamRewindable* stream, int *width
     }
 
     // destroy the cinfo used to create/build the huffman index
-    imageIndex->destroyInfo();
+   imageIndex->destroyInfo();
+
+   imageIndex->resetStream(); //add for reset stream offset
 
     // Init decoder to image decode mode
     if (!imageIndex->initializeInfoAndReadHeader()) {
@@ -1691,8 +1697,11 @@ bool SkJPEGImageDecoder::onBuildTileIndex(SkStreamRewindable* stream, int *width
     return true;
 }
 
-#ifdef MTK_JPEG_HW_DECODER
-#ifdef MTK_JPEG_HW_REGION_RESIZER
+#if defined(MTK_JPEG_HW_DECODER) || defined(MTK_JPEG_HW_REGION_RESIZER)
+
+extern void* allocateIONBuffer(int ionClientHnd, ion_user_handle_t *ionAllocHnd, int *bufferFD, size_t size);
+extern void freeIONBuffer(int ionClientHnd, ion_user_handle_t ionAllocHnd, void* bufferAddr, int bufferFD, size_t size);
+
 bool MDPCrop(void* src, int ionClientHnd, int srcFD, int width, int height, SkBitmap* bm, SkColorType colorType, int tdsp, void* pPPParam, unsigned int ISOSpeed)
 {
     if((nullptr == bm))
@@ -1772,15 +1781,17 @@ bool MDPCrop(void* src, int ionClientHnd, int srcFD, int width, int height, SkBi
 
         // set dst buffer
         ///SkDebugf("MDP_Crop: CONFIG_DST_BUF, go L:%d!!\n", __LINE__);
-        ion_user_handle_t ionAllocHnd;
-        int dstFD;
+        ion_user_handle_t ionAllocHnd = 0;
+        int dstFD = 0;
         void* dstBuffer = nullptr;
+
+		uint skBitmapSize_MTK = bm->height() * bm->rowBytes();
         // if srcFD >= 0, need to use ion for buffer allocation
         if (srcFD >= 0)
         {
             uint size[1];
-                
-            size[0] = bm->getSize();
+
+			size[0] = skBitmapSize_MTK;
             dstBuffer = allocateIONBuffer(ionClientHnd, &ionAllocHnd, &dstFD, size[0]);
             SkDebugf("MDPCrop allocateIONBuffer src:(%d), dst:(%d, %d, %d, %d, %p)", 
                     srcFD, ionClientHnd, ionAllocHnd, dstFD, size[0], dstBuffer);
@@ -1804,8 +1815,8 @@ bool MDPCrop(void* src, int ionClientHnd, int srcFD, int width, int height, SkBi
         // if dstBuffer is not nullptr, need to copy pixels to bitmap and free ION buffer
         if (dstBuffer != nullptr)
         {
-            memcpy(bm->getPixels(), dstBuffer, bm->getSize());
-            freeIONBuffer(ionClientHnd, ionAllocHnd, dstBuffer, dstFD, bm->getSize());
+            memcpy(bm->getPixels(), dstBuffer, skBitmapSize_MTK);
+            freeIONBuffer(ionClientHnd, ionAllocHnd, dstBuffer, dstFD, skBitmapSize_MTK);
         }
         
         if ( rst < 0) {
@@ -1919,15 +1930,17 @@ bool MDPResizer(void* src, int ionClientHnd, int srcFD, int width, int height, S
 
         // set dst buffer
         ///SkDebugf("MDPResizer: CONFIG_DST_BUF, go L:%d!!\n", __LINE__);
-        ion_user_handle_t ionAllocHnd;
-        int dstFD;
+        ion_user_handle_t ionAllocHnd = 0;
+        int dstFD = 0;
         void* dstBuffer = nullptr;
+
+		uint skBitmapSize_MTK = bm->height() * bm->rowBytes();
         // if srcFD >= 0, need to use ion for buffer allocation
         if (srcFD >= 0)
         {
             uint size[1];
     
-            size[0] = bm->getSize();
+            size[0] = skBitmapSize_MTK;
             dstBuffer = allocateIONBuffer(ionClientHnd, &ionAllocHnd, &dstFD, size[0]);
             SkDebugf("MDPResizer allocateIONBuffer src:(%d), dst:(%d, %d, %d, %d, %p)", 
                     srcFD, ionClientHnd, ionAllocHnd, dstFD, size[0], dstBuffer);
@@ -1952,8 +1965,8 @@ bool MDPResizer(void* src, int ionClientHnd, int srcFD, int width, int height, S
         // if dstBuffer is not nullptr, need to copy pixels to bitmap and free ION buffer
         if (dstBuffer != nullptr)
         {
-            memcpy(bm->getPixels(), dstBuffer, bm->getSize());
-            freeIONBuffer(ionClientHnd, ionAllocHnd, dstBuffer, dstFD, bm->getSize());
+            memcpy(bm->getPixels(), dstBuffer, skBitmapSize_MTK);
+            freeIONBuffer(ionClientHnd, ionAllocHnd, dstBuffer, dstFD, skBitmapSize_MTK);
         }
     
         if ( rst < 0) {
@@ -1965,7 +1978,6 @@ bool MDPResizer(void* src, int ionClientHnd, int srcFD, int width, int height, S
     }
     return false;
 }
-#endif
 #endif
 
 
@@ -1997,7 +2009,7 @@ bool SkJPEGImageDecoder::onDecodeSubset(SkBitmap* bm, const SkIRect& region, int
     //g_mt_end = 0;
     //SkDebugf("JPEG: debug_onDecodeSubset ++ , dur = %f,  id = %d,L:%d!!\n", mt_start - g_mt_start, gettid() , __LINE__);
 
-#ifdef MTK_JPEG_HW_DECODER
+#if defined(MTK_JPEG_HW_DECODER) || defined(MTK_JPEG_HW_REGION_RESIZER)
     unsigned int enTdshp = (this->getPostProcFlag()? 1 : 0);
 
     if (fFirstTileDone == false)
@@ -2018,21 +2030,22 @@ bool SkJPEGImageDecoder::onDecodeSubset(SkBitmap* bm, const SkIRect& region, int
     }
 #endif
 
-#ifdef MTK_SKIA_MULTI_THREAD_JPEG_REGION 
+#ifdef MTK_SKIA_MULTI_THREAD_JPEG_REGION
 
     JpgLibAutoClean auto_clean_cinfo ;
     JpgStreamAutoClean auto_clean_stream;
     jpeg_decompress_struct_ALPHA *cinfo = nullptr;
     SkStream *stream ;
     skjpeg_source_mgr_MTK *sk_stream = nullptr;
-      
+
     if(fImageIndex->mtkStream){
         //SkDebugf("MTR_JPEG: mtkStream  length = %d ,  L:%d!!\n", fImageIndex->mtkStream->getLength(),__LINE__);
-      
-        stream = new SkMemoryStream(fImageIndex->mtkStream->getMemoryBase() ,fImageIndex->mtkStream->getLength() , true);
-       
-        sk_stream = new skjpeg_source_mgr_MTK(stream, this); 
-       
+
+        //stream = new SkMemoryStream(fImageIndex->mtkStream->getMemoryBase() ,fImageIndex->mtkStream->getLength() , true);
+        stream = fImageIndex->mtkStream->duplicate().release();
+
+        sk_stream = new skjpeg_source_mgr_MTK(stream, this);
+
         cinfo = (jpeg_decompress_struct_ALPHA *)malloc(sizeof(struct jpeg_decompress_struct_ALPHA));
         memset(cinfo, 0, sizeof(struct jpeg_decompress_struct_ALPHA));
         auto_clean_cinfo.set(cinfo);
@@ -2233,8 +2246,8 @@ bool SkJPEGImageDecoder::onDecodeSubset(SkBitmap* bm, const SkIRect& region, int
             rowptr += bpr;
         }
 
-        #ifdef MTK_JPEG_HW_REGION_RESIZER 
-        
+#ifdef defined(MTK_JPEG_HW_REGION_RESIZER)
+
         double hw_resize = now_ms() ;
         //SkDebugf("MTR_JPEG: testmt_hw_resize ++ , time = %f , L:%d!!\n",hw_resize - g_mt_start  , __LINE__);
         
@@ -2298,7 +2311,7 @@ bool SkJPEGImageDecoder::onDecodeSubset(SkBitmap* bm, const SkIRect& region, int
 
         }
         
-        #endif //MTK_JPEG_HW_REGION_RESIZER 
+#endif //MTK_JPEG_HW_REGION_RESIZER 
 
         if (swapOnly) {
             bm->swap(bitmap);
