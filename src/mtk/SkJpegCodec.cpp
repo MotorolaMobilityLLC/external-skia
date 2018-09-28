@@ -21,9 +21,9 @@
 #if defined(MTK_JPEG_HW_DECODER) || defined(MTK_JPEG_HW_REGION_RESIZER)
   #if defined(MTK_JPEG_HW_DECODER)
   #include "mhal/MediaHal.h"
-  #include "SkFrontBufferedStream.h"
   #endif
   #if defined(MTK_JPEG_HW_REGION_RESIZER)
+  #include "SkFrontBufferedStream.h"
   #include "DpBlitStream.h"
   #endif
 #include <cutils/properties.h>
@@ -682,13 +682,13 @@ static sk_sp<SkColorSpace> read_color_space(jpeg_decompress_struct_ALPHA* dinfo)
 SkCodec::Result SkJpegCodec::ReadHeader(SkStream* stream, SkCodec** codecOut,
         JpegDecoderMgr_MTK** decoderMgrOut, sk_sp<SkColorSpace> defaultColorSpace) {
 
-#if defined(MTK_JPEG_HW_DECODER)
+#if defined(MTK_JPEG_HW_REGION_RESIZER)
     // assume maximum header size is 256KB
     #define JPEG_HEADER_SIZE 256 * 1024
     if (codecOut && (!stream->hasLength() || !stream->hasPosition()))
     {
         //SkCodecPrintf("SkJpegCodec::ReadHeader wrap stream with SkFrontBufferedStream");
-        stream = SkFrontBufferedStream::Create(stream, JPEG_HEADER_SIZE);
+        stream = SkFrontBufferedStream::Make(std::unique_ptr<SkStream>(stream), JPEG_HEADER_SIZE).release();
     }
 #endif
 
