@@ -107,7 +107,7 @@ unsigned int getISOSpeedRatings(void *buffer, unsigned int size)
     unsigned int nextIFDOffset;
 
     /* find APP1 marker*/
-    while(bytesLeft > 0)
+    while(bytesLeft > 1)
     {
         if ((0xFF == *bufPtr) && (0xE1 == *(bufPtr + 1)))
         {
