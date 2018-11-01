@@ -252,6 +252,10 @@ SkCodec::Result SkSampledCodec::sampledDecode(const SkImageInfo& info, void* pix
             SkASSERT(incResult == SkCodec::kIncompleteInput || incResult == SkCodec::kErrorInInput);
 
             SkASSERT(rowsDecoded <= info.height());
+            if (rowsDecoded < 0) {
+                SkDebugf("!!! rowsDecoded < 0, rowsDecoded= %d, incResult= %d\n", rowsDecoded, incResult);
+                return SkCodec::kInvalidInput;
+            }
             this->codec()->fillIncompleteImage(info, pixels, rowBytes, options.fZeroInitialized,
                                                info.height(), rowsDecoded);
             return incResult;
