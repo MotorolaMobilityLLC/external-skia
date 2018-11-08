@@ -11,7 +11,7 @@
 #include "SkTypes.h"
 #include "SkRefCnt.h"
 
-#ifdef SK_BUILD_FOR_ANDROID
+#ifdef SK_BUILD_FOR_ANDROID_FRAMEWORK
 
 class SkCanvas;
 class SkSurface;
@@ -35,8 +35,10 @@ public:
 #endif //SK_SUPPORT_GPU
 
     static sk_sp<SkSurface> getSurfaceFromCanvas(SkCanvas* canvas);
+
+    static void SafetyNetLog(const char*);
 };
 
-#endif // SK_BUILD_FOR_ANDROID
+#endif // SK_BUILD_FOR_ANDROID_FRAMEWORK
 
 #endif // SkAndroidFrameworkUtils_DEFINED
