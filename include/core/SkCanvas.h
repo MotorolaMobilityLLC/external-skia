@@ -2660,7 +2660,9 @@ private:
     std::unique_ptr<SkRasterHandleAllocator> fAllocator;
 
     SkSurface_Base*  fSurfaceBase;
+public:
     SkSurface_Base* getSurfaceBase() const { return fSurfaceBase; }
+private:
     void setSurfaceBase(SkSurface_Base* sb) {
         fSurfaceBase = sb;
     }
