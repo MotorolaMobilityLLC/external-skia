@@ -1150,6 +1150,7 @@ int SkJpegCodec::readRows_MTK(const SkImageInfo& dstInfo, void* dst, size_t rowB
     // In this case, we will color xform from fColorXformSrcRow into the dst.
     JSAMPLE* decodeDst = (JSAMPLE*) tmpBuffer;
     uint32_t* swizzleDst = (uint32_t*) tmpBuffer;
+    JSAMPLE* colorXDst = (JSAMPLE*) tmpBuffer;
     size_t decodeDstRowBytes = rowBytes;
     size_t swizzleDstRowBytes = rowBytes;
     int dstWidth = opts.fSubset ? opts.fSubset->width() : dstInfo.width();
@@ -1226,9 +1227,9 @@ int SkJpegCodec::readRows_MTK(const SkImageInfo& dstInfo, void* dst, size_t rowB
         }
 
         if (this->colorXform()) {
-            this->applyColorXform(dst, swizzleDst, dstWidth, kOpaque_SkAlphaType);
+            this->applyColorXform(colorXDst, swizzleDst, dstWidth, kOpaque_SkAlphaType);
             if (fIsSampleDecode == false)
-                tmpBuffer = SkTAddOffset<JSAMPLE>(tmpBuffer, rowBytes);
+                colorXDst = SkTAddOffset<JSAMPLE>(colorXDst, rowBytes);
         }
 
         decodeDst = SkTAddOffset<JSAMPLE>(decodeDst, decodeDstRowBytes);
