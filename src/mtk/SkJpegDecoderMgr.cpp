@@ -9,6 +9,10 @@
 
 #include "SkJpegUtility_MTK.h"
 
+#ifdef SK_BUILD_FOR_ANDROID_FRAMEWORK
+    #include "SkAndroidFrameworkUtils.h"
+#endif
+
 /*
  * Print information, warning, and error messages
  */
@@ -55,6 +59,9 @@ bool JpegDecoderMgr_MTK::getEncodedColor_MTK(SkEncodedInfo::Color* outColor) {
             *outColor = SkEncodedInfo::kYUV_Color;
             return true;
         case JCS_RGB_ALPHA:
+#ifdef SK_BUILD_FOR_ANDROID_FRAMEWORK
+            SkAndroidFrameworkUtils::SafetyNetLog("118372692");
+#endif
             *outColor = SkEncodedInfo::kRGB_Color;
             return true;
         case JCS_YCCK_ALPHA:
