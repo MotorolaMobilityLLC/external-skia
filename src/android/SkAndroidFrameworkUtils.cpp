@@ -18,7 +18,9 @@
 #include "effects/GrDisableColorXP.h"
 #endif //SK_SUPPORT_GPU
 
-#ifdef SK_BUILD_FOR_ANDROID
+#ifdef SK_BUILD_FOR_ANDROID_FRAMEWORK
+
+#include <log/log.h>
 
 #if SK_SUPPORT_GPU
 bool SkAndroidFrameworkUtils::clipWithStencil(SkCanvas* canvas) {
@@ -58,5 +60,9 @@ sk_sp<SkSurface> SkAndroidFrameworkUtils::getSurfaceFromCanvas(SkCanvas* canvas)
     return surface;
 }
 
-#endif // SK_BUILD_FOR_ANDROID
+void SkAndroidFrameworkUtils::SafetyNetLog(const char* bugNumber) {
+    android_errorWriteLog(0x534e4554, bugNumber);
+}
+
+#endif // SK_BUILD_FOR_ANDROID_FRAMEWORK
 
