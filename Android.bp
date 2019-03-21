@@ -22,7 +22,7 @@ mtk_jpeg_enhance_skia_defaults {
 }
 cc_library_static {
     name: "libskia",
-    host_supported: true,
+    //host_supported: true,
     cflags: [
         "-U_FORTIFY_SOURCE",
         "-DATRACE_TAG=ATRACE_TAG_VIEW",
@@ -35,7 +35,7 @@ cc_library_static {
         "-Wno-thread-safety-analysis",
         "-Wno-unused-parameter",
         "-Wno-unused-variable",
-        "-fvisibility=hidden",
+        //"-fvisibility=hidden",
     ],
 
     cppflags:[
@@ -124,7 +124,6 @@ cc_library_static {
         "src/codec/SkEncodedInfo.cpp",
         "src/codec/SkGifCodec.cpp",
         "src/codec/SkIcoCodec.cpp",
-        "src/codec/SkJpegCodec.cpp",
         "src/codec/SkJpegDecoderMgr.cpp",
         "src/codec/SkJpegUtility.cpp",
         "src/codec/SkMaskSwizzler.cpp",
@@ -1002,6 +1001,10 @@ cc_defaults {
         "libpiex",
         "libpng",
         "libz",
+        "libjpeg-alpha",
+        "libion_mtk_sys",
+        //"libdpframework_mtk",
+        "libion",
     ],
     static_libs: [
         "libarect",
@@ -1072,7 +1075,8 @@ cc_test {
     name: "skia_dm",
 
     defaults: [
-        "skia_tool_deps"
+        "skia_tool_deps",
+        "mtk_jpeg_enhance_skia_defaults",
     ],
 
     local_include_dirs: [
@@ -1914,7 +1918,8 @@ cc_test {
     name: "skia_nanobench",
 
     defaults: [
-        "skia_tool_deps"
+        "skia_tool_deps",
+        "mtk_jpeg_enhance_skia_defaults",
     ],
 
     local_include_dirs: [
