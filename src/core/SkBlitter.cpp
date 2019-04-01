@@ -24,6 +24,9 @@
 #include "SkUtils.h"
 #include "SkWriteBuffer.h"
 #include "SkXfermodeInterpretation.h"
+#ifdef __MULTI_THREADS_OPTIMIZE_2D__
+#include "SkBlitterMTAdapter.h"
+#endif
 
 SkBlitter::~SkBlitter() {}
 
@@ -876,7 +879,11 @@ SkBlitter* SkBlitter::Choose(const SkPixmap& device,
     switch (device.colorType()) {
         case kN32_SkColorType:
             if (shaderContext) {
+#ifdef __MULTI_THREADS_OPTIMIZE_2D__
+                return alloc->make<SkBlitterMTAdapter>(device, *paint, shaderContext);
+#else
                 return alloc->make<SkARGB32_Shader_Blitter>(device, *paint, shaderContext);
+#endif
             } else if (paint->getColor() == SK_ColorBLACK) {
                 return alloc->make<SkARGB32_Black_Blitter>(device, *paint);
             } else if (paint->getAlpha() == 0xFF) {
