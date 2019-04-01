@@ -101,10 +101,10 @@ public:
          */
         virtual void shadeSpan(int x, int y, SkPMColor[], int count) = 0;
 
-    protected:
+    //protected:
         // Reference to shader, so we don't have to dupe information.
         const SkShaderBase& fShader;
-
+    protected:
         uint8_t         getPaintAlpha() const { return fPaintAlpha; }
         const SkMatrix& getTotalInverse() const { return fTotalInverse; }
         const SkMatrix& getCTM() const { return fCTM; }
