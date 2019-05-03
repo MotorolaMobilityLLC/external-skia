@@ -688,6 +688,11 @@ public:
         return this->onGetRepetitionCount();
     }
 
+#ifdef MTK_IMAGE_ENABLE_PQ_FOR_JPEG
+    int getPostProcFlag() const { return fPostProc; }
+    void setPostProcFlag(int flag) { fPostProc = flag;}
+#endif
+
 protected:
     const SkEncodedInfo& getEncodedInfo() const { return fEncodedInfo; }
 
@@ -842,6 +847,10 @@ private:
     int                                fCurrScanline;
 
     bool                               fStartedIncrementalDecode;
+
+#ifdef MTK_IMAGE_ENABLE_PQ_FOR_JPEG
+    int                                fPostProc;
+#endif
 
     bool initializeColorXform(const SkImageInfo& dstInfo, SkEncodedInfo::Alpha, bool srcIsOpaque);
 
