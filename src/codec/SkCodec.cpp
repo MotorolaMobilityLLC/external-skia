@@ -144,6 +144,10 @@ SkCodec::SkCodec(SkEncodedInfo&& info, XformFormat srcFormat, std::unique_ptr<Sk
     , fOptions()
     , fCurrScanline(-1)
     , fStartedIncrementalDecode(false)
+#ifdef MTK_IMAGE_ENABLE_PQ_FOR_JPEG
+    , fPostProc(0)
+#endif
+
 {}
 
 SkCodec::~SkCodec() {}
