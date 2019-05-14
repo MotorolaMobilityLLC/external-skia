@@ -71,9 +71,11 @@ func mtkJpegEnhanceSkiaDefaults(ctx android.LoadHookContext) {
 
 	//jpeg legacy shared libs
 	sharedlibs = append(sharedlibs, "libion")
-	//sharedlibs = append(sharedlibs, "libdpframework_mtk")
-	//sharedlibs = append(sharedlibs, "libion_mtk_sys")
 	sharedlibs = append(sharedlibs, "libjpeg-alpha")
+	sharedlibs = append(sharedlibs, "libhidlbase")
+	sharedlibs = append(sharedlibs, "vendor.mediatek.hardware.mms@1.0")
+	sharedlibs = append(sharedlibs, "vendor.mediatek.hardware.mms@1.1")
+	sharedlibs = append(sharedlibs, "vendor.mediatek.hardware.mms@1.2")
 
 	p.Target.Android.Local_include_dirs = localIncludeDirs
 	p.Target.Android.Include_dirs = includeDirs

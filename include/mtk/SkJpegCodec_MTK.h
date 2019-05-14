@@ -19,7 +19,7 @@
 #include <sys/mman.h>
 #include <linux/ion.h>
 #include <ion/ion.h>
-//#include <linux/mtk_ion.h>
+
 
 #define ION_HEAP_MULTIMEDIA_MASK (1 << 10)
 
@@ -46,8 +46,10 @@ public:
         if (fIonClientHnd >= 0)
         {
             if(fAddr != NULL)
+            {
                 free();
-            fSize = size;
+            }
+			fSize = size;
             ret = ion_alloc(fIonClientHnd, size, 0, ION_HEAP_MULTIMEDIA_MASK, ION_FLAG_CACHED | ION_FLAG_CACHED_NEEDS_SYNC, &fIonAllocHnd);
             if (ret)
             {
