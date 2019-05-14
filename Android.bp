@@ -1002,8 +1002,10 @@ cc_defaults {
         "libpng",
         "libz",
         "libjpeg-alpha",
-        //"libion_mtk_sys",
-        //"libdpframework_mtk",
+        "libhidlbase",
+        "vendor.mediatek.hardware.mms@1.0",
+        "vendor.mediatek.hardware.mms@1.1",
+        "vendor.mediatek.hardware.mms@1.2",
         "libion",
     ],
     static_libs: [
