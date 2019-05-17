@@ -486,6 +486,52 @@ static bool can_import_protected_content(GrContext* context) {
     return false;
 }
 
+void bindTextureImage(
+        const GrBackendTexture& backTexture,
+        GrContext* context, AHardwareBuffer* hardwareBuffer,
+        bool isProtectedContent) {
+    if (GrBackendApi::kVulkan == context->backend()) {
+        return;
+    }
+
+    EGLClientBuffer clientBuffer = eglGetNativeClientBufferANDROID(hardwareBuffer);
+    isProtectedContent = isProtectedContent && can_import_protected_content(context);
+    EGLint attribs[] = { EGL_IMAGE_PRESERVED_KHR, EGL_TRUE,
+                         isProtectedContent ? EGL_PROTECTED_CONTENT_EXT : EGL_NONE,
+                         isProtectedContent ? EGL_TRUE : EGL_NONE,
+                         EGL_NONE };
+    EGLDisplay display = eglGetCurrentDisplay();
+    // eglCreateImageKHR will add a ref to the AHardwareBuffer
+    EGLImageKHR image = eglCreateImageKHR(display, EGL_NO_CONTEXT, EGL_NATIVE_BUFFER_ANDROID,
+                                          clientBuffer, attribs);
+    if (EGL_NO_IMAGE_KHR == image) {
+        SkDebugf("Could not create EGL image, err = (%#x)", (int) eglGetError() );
+        return;
+    }
+
+    GrGLTextureInfo textureInfo;
+    backTexture.getGLTextureInfo(&textureInfo);
+
+    if (!textureInfo.fID) {
+        return;
+    }
+
+    glBindTexture(textureInfo.fTarget/*GR_GL_TEXTURE_EXTERNAL*/, textureInfo.fID);
+    GLenum status = GL_NO_ERROR;
+    if ((status = glGetError()) != GL_NO_ERROR) {
+        SkDebugf("glBindTexture failed (%#x)", (int) status);
+        eglDestroyImageKHR(display, image);
+        return;
+    }
+    glEGLImageTargetTexture2DOES(textureInfo.fTarget, image);
+    if ((status = glGetError()) != GL_NO_ERROR) {
+        SkDebugf("glEGLImageTargetTexture2DOES failed (%#x)", (int) status);
+        eglDestroyImageKHR(display, image);
+        return;
+    }
+    context->resetContext(kTextureBinding_GrGLBackendState);
+}
+
 GrBackendTexture MakeBackendTexture(GrContext* context, AHardwareBuffer* hardwareBuffer,
                                     int width, int height,
                                     DeleteImageProc* deleteProc,
