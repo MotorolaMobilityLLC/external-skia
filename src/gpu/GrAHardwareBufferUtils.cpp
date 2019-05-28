@@ -510,7 +510,9 @@ void bindTextureImage(
     }
 
     GrGLTextureInfo textureInfo;
-    backTexture.getGLTextureInfo(&textureInfo);
+    if (!backTexture.getGLTextureInfo(&textureInfo)) {
+        return;
+    }
 
     if (!textureInfo.fID) {
         return;
