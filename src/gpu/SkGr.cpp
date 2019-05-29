@@ -82,6 +82,13 @@ sk_sp<GrTextureProxy> GrUploadBitmapToTextureProxy(GrProxyProvider* proxyProvide
         return nullptr;
     }
 
+#ifdef JOURNEY_DEBUG_ENHANCED
+    // CJ: we use this to check if SURFACE_SIZE_MULTIPLIER is suitable
+    SkString atrace_name;
+    atrace_name.appendf("GrUploadBitmapToTextureProxy %dx%d",bitmap.width(),bitmap.height());
+    ATRACE_NAME(atrace_name.c_str());
+#endif
+
     // In non-ddl we will always instantiate right away. Thus we never want to copy the SkBitmap
     // even if it's mutable. In ddl, if the bitmap is mutable then we must make a copy since the
     // upload of the data to the gpu can happen at anytime and the bitmap may change by then.

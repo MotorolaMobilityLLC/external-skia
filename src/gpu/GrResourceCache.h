@@ -342,6 +342,9 @@ private:
     // our budget, used in purgeAsNeeded()
     int                                 fMaxCount;
     size_t                              fMaxBytes;
+#ifdef JOURNEY_FEATURE_SYSTEM_ENHANCED
+    size_t                              fMaxEnhanceBytes;
+#endif
     int                                 fMaxUnusedFlushes;
 
 #if GR_CACHE_STATS

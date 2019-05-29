@@ -19,6 +19,10 @@
 #include "SkOpts.h"
 #include "SkTSort.h"
 
+#ifdef JOURNEY_DEBUG_ENHANCED
+#include "utils/Trace.h"
+#endif
+
 DECLARE_SKMESSAGEBUS_MESSAGE(GrUniqueKeyInvalidatedMessage);
 
 DECLARE_SKMESSAGEBUS_MESSAGE(GrGpuResourceFreedMessage);
@@ -95,6 +99,9 @@ GrResourceCache::~GrResourceCache() {
 void GrResourceCache::setLimits(int count, size_t bytes, int maxUnusedFlushes) {
     fMaxCount = count;
     fMaxBytes = bytes;
+#ifdef JOURNEY_FEATURE_SYSTEM_ENHANCED
+    fMaxEnhanceBytes = bytes * 1.5;
+#endif
     fMaxUnusedFlushes = maxUnusedFlushes;
     this->purgeAsNeeded();
 }
@@ -135,6 +142,21 @@ void GrResourceCache::insertResource(GrGpuResource* resource) {
     }
 
     this->purgeAsNeeded();
+#ifdef JOURNEY_FEATURE_SYSTEM_ENHANCED
+//CJ:PBGAM-1697 Try to ensure that the size of the cache can cover 1.5 times the buffer
+    if((fMaxBytes * 0.9) < fBudgetedBytes && fMaxBytes < fMaxEnhanceBytes) {
+        SkDebugf("fMaxBytes increase from %d to %d",fMaxBytes, (int)(fMaxBytes * 1.25));
+        fMaxBytes = fMaxBytes * 1.25;
+    }
+#endif
+#ifdef JOURNEY_DEBUG_ENHANCED
+//CJ:Because SK_TRACE_EVENTS_IN_FRAMEWORK is turned off by default, we don't open trace by default.
+//    ATRACE_INT("skia-cache-max",fMaxBytes);
+//    ATRACE_INT("skia-cache-all",fBytes);
+//    ATRACE_INT("skia-cache-used",fBudgetedBytes);
+//    ATRACE_INT("skia-cache-free",fMaxBytes - fBudgetedBytes);
+#endif
+
 }
 
 void GrResourceCache::removeResource(GrGpuResource* resource) {
