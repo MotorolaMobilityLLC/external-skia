@@ -2098,9 +2098,37 @@ bool GrGLCaps::initDescForDstCopy(const GrRenderTargetProxy* src, GrSurfaceDesc*
     return true;
 }
 
+//CJ:ALPS04642388
+/*
+From fa9f5b6f88f860319054e8978dc26d8adcb34da5 Mon Sep 17 00:00:00 2001
+From: Brian Salomon <bsalomon@google.com>
+Date: Tue, 23 Apr 2019 13:32:37 +0800
+Subject: [PATCH] [ALPS04401670] Limit Analytic Clip FP workaround to powervr rogue on x86
+
+Limit Analytic Clip FP workaround to powervr rogue on x86
+
+Bug: b/123092993
+Reviewed-on: https://skia-review.googlesource.com/c/187784
+Reviewed-by: Robert Phillips <robertphillips@google.com>
+Commit-Queue: Brian Salomon <bsalomon@google.com>
+
+Change-Id: I799d1d78b9f8ab90006bf8abaf27e98d4edc2cd5
+CR-Id: ALPS04401670
+Feature: Google Patch
+*/
+#define ALPS04642388 
+
 void GrGLCaps::applyDriverCorrectnessWorkarounds(const GrGLContextInfo& ctxInfo,
                                                  const GrContextOptions& contextOptions,
                                                  GrShaderCaps* shaderCaps) {
+#ifdef ALPS04642388
+    bool isX86PowerVRRogue = false;
+#if defined(SK_CPU_X86)
+    if (kPowerVRRogue_GrGLRenderer == ctxInfo.renderer()) {
+        isX86PowerVRRogue = true;
+    }
+#endif
+#endif
     // A driver but on the nexus 6 causes incorrect dst copies when invalidate is called beforehand.
     // Thus we are blacklisting this extension for now on Adreno4xx devices.
     if (kAdreno4xx_GrGLRenderer == ctxInfo.renderer()) {
@@ -2162,8 +2190,11 @@ void GrGLCaps::applyDriverCorrectnessWorkarounds(const GrGLContextInfo& ctxInfo,
     if (kPowerVR54x_GrGLRenderer == ctxInfo.renderer()) {
         fMipMapSupport = false;
     }
-
+#ifdef ALPS04642388
+    if (isX86PowerVRRogue) {
+#else
     if (kPowerVRRogue_GrGLRenderer == ctxInfo.renderer()) {
+#endif
         // Temporarily disabling clip analytic fragments processors on Nexus player while we work
         // around a driver bug related to gl_FragCoord.
         // https://bugs.chromium.org/p/skia/issues/detail?id=7286
