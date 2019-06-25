@@ -41,7 +41,9 @@ GrBackendTexture MakeBackendTexture(GrContext* context, AHardwareBuffer* hardwar
 void bindTextureImage(
         const GrBackendTexture& backTexture,
         GrContext* context, AHardwareBuffer* hardwareBuffer,
-        bool isProtectedContent);
+        bool isProtectedContent,
+        DeleteImageProc* deleteProc,
+        DeleteImageCtx* deleteCtx);
 } // GrAHardwareBufferUtils
 
 
