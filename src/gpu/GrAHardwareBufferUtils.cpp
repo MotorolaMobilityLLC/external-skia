@@ -179,6 +179,28 @@ void delete_gl_texture(void* context) {
     delete cleanupHelper;
 }
 
+//M:add by ImageConsumer to release EGLImage for solved buffer leak,@{
+class IMAGECleanupHelper {
+public:
+    IMAGECleanupHelper(EGLImageKHR image, EGLDisplay display)
+        : fImage(image)
+        , fDisplay(display) { }
+    ~IMAGECleanupHelper() {
+        // eglDestroyImageKHR will remove a ref from the AHardwareBuffer
+        eglDestroyImageKHR(fDisplay, fImage);
+    }
+private:
+    EGLImageKHR fImage;
+    EGLDisplay  fDisplay;
+};
+
+void delete_image_texture(void* context) {
+    IMAGECleanupHelper* imagecleanupHelper = static_cast<IMAGECleanupHelper*>(context);
+    delete imagecleanupHelper;
+}
+//}@M:end
+
+
 static GrBackendTexture make_gl_backend_texture(
         GrContext* context, AHardwareBuffer* hardwareBuffer,
         int width, int height,
@@ -489,7 +511,9 @@ static bool can_import_protected_content(GrContext* context) {
 void bindTextureImage(
         const GrBackendTexture& backTexture,
         GrContext* context, AHardwareBuffer* hardwareBuffer,
-        bool isProtectedContent) {
+        bool isProtectedContent,
+        DeleteImageProc* deleteProc,
+        DeleteImageCtx* deleteCtx ) {
     if (GrBackendApi::kVulkan == context->backend()) {
         return;
     }
@@ -532,6 +556,9 @@ void bindTextureImage(
         return;
     }
     context->resetContext(kTextureBinding_GrGLBackendState);
+    //For delete EGLIamge
+    *deleteProc = delete_image_texture;
+    *deleteCtx = new IMAGECleanupHelper(image, display);
 }
 
 GrBackendTexture MakeBackendTexture(GrContext* context, AHardwareBuffer* hardwareBuffer,
