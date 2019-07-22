@@ -642,7 +642,9 @@ bool SkJPEGImageDecoder::onBuildTileIndex(SkStreamRewindable* stream, int *width
 
     SkAutoTMalloc<uint8_t> allocMemory(length);
 
-    stream->read(allocMemory.get(), length) ;
+    SkStreamRewindable* dupStream = stream->duplicate().release();
+
+    dupStream->read(allocMemory.get(), length) ;
 #ifdef MTK_JPEG_HW_REGION_RESIZER
     /* parsing and get ISOSpeedRatings */
     fISOSpeedRatings = getISOSpeedRatings(allocMemory.get(), length);
@@ -651,7 +653,7 @@ bool SkJPEGImageDecoder::onBuildTileIndex(SkStreamRewindable* stream, int *width
 
     SkMemoryStream* mtkPxyStream = new SkMemoryStream(allocMemory ,  length,  true);
 
-    SkAutoTDelete<SkJPEGImageIndex> imageIndex = new SkJPEGImageIndex(stream, this);
+    SkAutoTDelete<SkJPEGImageIndex> imageIndex = new SkJPEGImageIndex(dupStream, this);
 
     if(mtkPxyStream){
         imageIndex->mtkStream = mtkPxyStream ;
@@ -720,35 +722,7 @@ bool SkJPEGImageDecoder::onBuildTileIndex(SkStreamRewindable* stream, int *width
     }
 
     auto profile = read_color_profile(cinfo);
-    if (profile) {
-        auto type = profile->profile()->data_color_space;
-        switch (cinfo->jpeg_color_space) {
-            case JCS_CMYK_ALPHA:
-            case JCS_YCCK_ALPHA:
-                if (type != skcms_Signature_CMYK) {
-                    profile = nullptr;
-                }
-                break;
-            case JCS_GRAYSCALE_ALPHA:
-                if (type != skcms_Signature_Gray &&
-                    type != skcms_Signature_RGB)
-                {
-                    profile = nullptr;
-                }
-                break;
-            default:
-                if (type != skcms_Signature_RGB) {
-                    profile = nullptr;
-                }
-                break;
-        }
-    }
-    if (!profile) {
-        fEncodedInfo = SkEncodedInfo::Make(fImageWidth, fImageHeight, color, SkEncodedInfo::kOpaque_Alpha, 8);
-    }
-    else {
-        fEncodedInfo = SkEncodedInfo::Make(fImageWidth, fImageHeight, color, SkEncodedInfo::kOpaque_Alpha, 8, std::move(profile));
-    }
+
     delete fImageIndex;
     fImageIndex = imageIndex.detach();
 
@@ -756,6 +730,12 @@ bool SkJPEGImageDecoder::onBuildTileIndex(SkStreamRewindable* stream, int *width
       SkDebugf("buildTileIndex fail, region_decoder unsupported format : prog %d, comp %d, scan_comp %d!!\n"
       , cinfo->progressive_mode, cinfo->num_components, cinfo->comps_in_scan );
       return false;
+    }
+
+    if(profile)
+    {
+        SkDebugf("icc profile color space found");
+        return false; // mtk region decode cannot handle icc profile
     }
 
     return true;
