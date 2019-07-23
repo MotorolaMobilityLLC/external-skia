@@ -375,7 +375,8 @@ SkCodec::Result SkGifCodec::decodeFrame(bool firstAttempt, const Options& opts, 
             *rowsDecoded = fRowsDecoded;
         }
         if (fatalError) {
-            return kErrorInInput;
+            //return kErrorInInput;
+            SkDebugf("gif file has error, just return kIncompleteInput");
         }
         return kIncompleteInput;
     }
