@@ -49,17 +49,17 @@ public:
             {
                 free();
             }
-			fSize = size;
+            fSize = size;
             ret = ion_alloc(fIonClientHnd, size, 0, ION_HEAP_MULTIMEDIA_MASK, ION_FLAG_CACHED | ION_FLAG_CACHED_NEEDS_SYNC, &fIonAllocHnd);
             if (ret)
             {
-                SkDebugf("SkIonMalloc::ion_alloc failed (%d, %d, %d)\n", fIonClientHnd, size, fIonAllocHnd);
+                SkDebugf("SkIonMalloc::ion_alloc failed (%d, %lu, %d)\n", fIonClientHnd, size, fIonAllocHnd);
                 return NULL;
             }
             ret = ion_map(fIonClientHnd, fIonAllocHnd, size, PROT_READ | PROT_WRITE, MAP_SHARED, 0, &fAddr, &fShareFD);
             if (ret)
             {
-                SkDebugf("SkIonMalloc::ion_mmap failed (%d, %d, %d)\n", fIonClientHnd, size, fShareFD);
+                SkDebugf("SkIonMalloc::ion_mmap failed (%d, %lu, %d)\n", fIonClientHnd, size, fShareFD);
                 free();
                 return NULL;
             }
@@ -76,7 +76,7 @@ public:
             {
                 int ret = munmap(fAddr, fSize);
                 if (ret < 0)
-                    SkDebugf("SkIonMalloc::ion_munmap failed (%d, %p, %d)\n", fIonClientHnd, fAddr, fSize);
+                    SkDebugf("SkIonMalloc::ion_munmap failed (%d, %p, %lu)\n", fIonClientHnd, fAddr, fSize);
                 else
                     fAddr = NULL;
             }
