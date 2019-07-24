@@ -395,8 +395,8 @@ private:
     typedef SkImageDecoder INHERITED;
 
 #ifdef MTK_JPEG_HW_REGION_RESIZER
-    bool fFirstTileDone;
-    bool fUseHWResizer;
+    bool fFirstTileDone = false;
+    bool fUseHWResizer = false;
     int fIonClientHnd = 0;
 #endif
 
@@ -763,28 +763,24 @@ bool MDPResizer(void* src, int ionClientHnd, int srcFD, int width, int height, S
        (colorType == kRGB_565_SkColorType))
     {
         sp<IMms> IMms_service = IMms::tryGetService();
-		if (IMms_service == nullptr)
-		{
-			SkDebugf("cannot find IMms_service!");
-			return false;
-		}
-		MDPParam mdpParam;
-		memset(&mdpParam, 0, sizeof(MDPParam));
+        if (IMms_service == nullptr)
+        {
+            SkDebugf("cannot find IMms_service!");
+            return false;
+        }
+        MDPParam mdpParam;
+        memset(&mdpParam, 0, sizeof(MDPParam));
         unsigned int src_size = 0;
         unsigned int src_pByte = 4;
-		mdpParam.src_planeNumber = 1;
+        mdpParam.src_planeNumber = 1;
 
-        switch(colorType)
+        if(colorType == kRGBA_8888_SkColorType)
         {
-            case kRGBA_8888_SkColorType:
-                mdpParam.dst_format = eRGBX8888; //eABGR8888;    //bltParam.dstFormat = MHAL_FORMAT_ABGR_8888;
-                break;
-            case kRGB_565_SkColorType:
-                mdpParam.dst_format = eRGB565;    //bltParam.dstFormat = MHAL_FORMAT_RGB_565;
-                break;
-            default :
-                ALOGW("MDPResizer : invalid bitmap config %d", colorType);
-                return false;
+            mdpParam.dst_format = eRGBX8888; //eABGR8888;    //bltParam.dstFormat = MHAL_FORMAT_ABGR_8888;
+        }
+        else
+        {
+            mdpParam.dst_format = eRGB565;    //bltParam.dstFormat = MHAL_FORMAT_RGB_565;
         }
         switch(sc)
         {
@@ -811,14 +807,14 @@ bool MDPResizer(void* src, int ionClientHnd, int srcFD, int width, int height, S
         }
 
         src_size = width * height * src_pByte ;
-		mdpParam.src_sizeList[0] = src_size;
-        SkDebugf("MDPResizer: wh (%d %d)->(%d %d), fmt %d->%d, size %d->%d, regionPQ %d!!\n", width, height, bm->width(), bm->height()
+        mdpParam.src_sizeList[0] = src_size;
+        SkDebugf("MDPResizer: wh (%d %d)->(%d %d), fmt %d->%d, size %d->%lu, regionPQ %d!!\n", width, height, bm->width(), bm->height()
         ,sc, colorType, src_size, bm->rowBytes() * bm->height(), tdsp);
 
         {
             mdpParam.pq_param.enable = (tdsp == 0)? false:true;
-			mdpParam.pq_param.scenario = MMS_MEDIA_TYPE_ENUM::MMS_MEDIA_PICTURE;
-			mdpParam.pq_param.iso = ISOSpeed;
+            mdpParam.pq_param.scenario = MMS_MEDIA_TYPE_ENUM::MMS_MEDIA_PICTURE;
+            mdpParam.pq_param.iso = ISOSpeed;
 
             if (pPPParam)
             {
@@ -830,54 +826,50 @@ bool MDPResizer(void* src, int ionClientHnd, int srcFD, int width, int height, S
         int src_ion_handle_tobe_free;
         if (srcFD >= 0)
         {
-			uint32_t src_mva = 0 ;
-			IONVaToMva(ionClientHnd, (unsigned long)src, src_size, &src_mva, &src_ion_handle_tobe_free);
-			mdpParam.src_MVAList[0] = src_mva;
+            uint32_t src_mva = 0 ;
+            IONVaToMva(ionClientHnd, (unsigned long)src, src_size, &src_mva, &src_ion_handle_tobe_free);
+            mdpParam.src_MVAList[0] = src_mva;
         }
         else
-			return false;
+            return false;
 
-		mdpParam.src_rect.x = 0;
+        mdpParam.src_rect.x = 0;
         mdpParam.src_rect.y = 0;
         mdpParam.src_rect.w = width;
         mdpParam.src_rect.h = height;
-		mdpParam.src_width = width;
-		mdpParam.src_height = height;
-		mdpParam.src_yPitch = width * src_pByte;
-		mdpParam.src_profile = MMS_PROFILE_ENUM::MMS_PROFILE_JPEG;
+        mdpParam.src_width = width;
+        mdpParam.src_height = height;
+        mdpParam.src_yPitch = width * src_pByte;
+        mdpParam.src_profile = MMS_PROFILE_ENUM::MMS_PROFILE_JPEG;
 
         // set dst buffer
         ///SkDebugf("MDPResizer: CONFIG_DST_BUF, go L:%d!!\n", __LINE__);
         ion_user_handle_t ionAllocHnd = 0;
         int dstFD = 0;
         void* dstBuffer = nullptr;
-		unsigned int dst_size = 0;
-		unsigned int skBitmapSize_MTK = bm->height() * bm->rowBytes();
-		mdpParam.dst_planeNumber = 1;
+        unsigned int dst_size = 0;
+        unsigned int skBitmapSize_MTK = bm->height() * bm->rowBytes();
+        mdpParam.dst_planeNumber = 1;
         // if srcFD >= 0, need to use ion for buffer allocation
         int dst_ion_handle_tobe_free;
-        if (srcFD >= 0)
-        {
-			uint32_t dst_mva = 0 ;
-            dst_size = skBitmapSize_MTK;
-			mdpParam.dst_sizeList[0] = dst_size;
-			dstBuffer = allocateIONBuffer(ionClientHnd, &ionAllocHnd, &dstFD, dst_size);
-			IONVaToMva(ionClientHnd, (unsigned long)dstBuffer, dst_size, &dst_mva, &dst_ion_handle_tobe_free);
-			mdpParam.dst_MVAList[0] = dst_mva;
-            SkDebugf("MDPResizer allocateIONBuffer src:(%d), dst:(%d, %d, %d, %d, %p)",
+
+        uint32_t dst_mva = 0 ;
+        dst_size = skBitmapSize_MTK;
+        mdpParam.dst_sizeList[0] = dst_size;
+        dstBuffer = allocateIONBuffer(ionClientHnd, &ionAllocHnd, &dstFD, dst_size);
+        IONVaToMva(ionClientHnd, (unsigned long)dstBuffer, dst_size, &dst_mva, &dst_ion_handle_tobe_free);
+        mdpParam.dst_MVAList[0] = dst_mva;
+        SkDebugf("MDPResizer allocateIONBuffer src:(%d), dst:(%d, %d, %d, %d, %p)",
                     srcFD, ionClientHnd, ionAllocHnd, dstFD, dst_size, dstBuffer);
-        }
-        else
-           return false;
 
         mdpParam.dst_rect.x = 0;
         mdpParam.dst_rect.y = 0;
         mdpParam.dst_rect.w = bm->width();
         mdpParam.dst_rect.h = bm->height();
-		mdpParam.dst_width = bm->width();
-		mdpParam.dst_height = bm->height();
-		mdpParam.dst_yPitch = bm->rowBytes();
-		mdpParam.dst_profile = MMS_PROFILE_ENUM::MMS_PROFILE_JPEG;
+        mdpParam.dst_width = bm->width();
+        mdpParam.dst_height = bm->height();
+        mdpParam.dst_yPitch = bm->rowBytes();
+        mdpParam.dst_profile = MMS_PROFILE_ENUM::MMS_PROFILE_JPEG;
 
         //SkDebugf("MDPResizer: CONFIG_DST_SIZE, go L:%d!!\n", __LINE__);
 
@@ -892,17 +884,17 @@ bool MDPResizer(void* src, int ionClientHnd, int srcFD, int width, int height, S
         }
 
         if(src_ion_handle_tobe_free != -1)
-		{
-			SkDebugf("src  ion_free_handle(%d)  \n", src_ion_handle_tobe_free);
-			ion_free(ionClientHnd, src_ion_handle_tobe_free);
-		}
+        {
+            SkDebugf("src  ion_free_handle(%d)  \n", src_ion_handle_tobe_free);
+            ion_free(ionClientHnd, src_ion_handle_tobe_free);
+        }
 
-		if(dst_ion_handle_tobe_free != -1)
-		{
-			SkDebugf("dst  ion_free_handle(%d)  \n", dst_ion_handle_tobe_free);
-	 		ion_free(ionClientHnd, dst_ion_handle_tobe_free);
-		}
-		return true;
+        if(dst_ion_handle_tobe_free != -1)
+        {
+            SkDebugf("dst  ion_free_handle(%d)  \n", dst_ion_handle_tobe_free);
+            ion_free(ionClientHnd, dst_ion_handle_tobe_free);
+        }
+        return true;
     }
     return false;
 
@@ -949,7 +941,8 @@ bool SkJPEGImageDecoder::onDecodeSubset(SkBitmap* bm, SkBRDAllocator* allocator,
         sk_stream = new skjpeg_source_mgr_MTK(stream, this);
 
         cinfo = (jpeg_decompress_struct_ALPHA *)malloc(sizeof(struct jpeg_decompress_struct_ALPHA));
-        memset(cinfo, 0, sizeof(struct jpeg_decompress_struct_ALPHA));
+        if(cinfo != nullptr)
+            memset(cinfo, 0, sizeof(struct jpeg_decompress_struct_ALPHA));
         auto_clean_cinfo.set(cinfo);
 
         skjpeg_error_mgr_MTK sk_err;
@@ -1000,7 +993,8 @@ bool SkJPEGImageDecoder::onDecodeSubset(SkBitmap* bm, SkBRDAllocator* allocator,
 
     SkAutoTMalloc<uint8_t> srcStorage;
     skjpeg_error_mgr_MTK errorManager;
-    set_error_mgr(cinfo, &errorManager);
+    if(cinfo != nullptr)
+        set_error_mgr(cinfo, &errorManager);
 
     skjpeg_error_mgr_MTK::AutoPushJmpBuf jmp(&errorManager);
     if (setjmp(jmp)) {
@@ -1075,13 +1069,13 @@ bool SkJPEGImageDecoder::onDecodeSubset(SkBitmap* bm, SkBRDAllocator* allocator,
 if(!fFirstTileDone || fUseHWResizer)
 {
 
-	#ifdef MTK_SKIA_USE_ION
+    #ifdef MTK_SKIA_USE_ION
     SkIonMalloc srcAllocator(fIonClientHnd);
     uint8_t* hwBuffer = (uint8_t*)srcAllocator.reset(width * height * srcBytesPerPixel + 4);
-	#else
+    #else
     SkAutoTMalloc<uint8_t> hwStorage;
     uint8_t* hwBuffer = (uint8_t*)srcStorage.reset(width * height * srcBytesPerPixel + 4);
-	#endif
+    #endif
 
     hwBuffer[width * height * srcBytesPerPixel + 4 - 1] = 0xF0;
     hwBuffer[width * height * srcBytesPerPixel + 4 - 2] = 0xF0;
@@ -1110,11 +1104,11 @@ if(!fFirstTileDone || fUseHWResizer)
     bool result = false;
     do
     {
-    	#ifdef MTK_SKIA_USE_ION
+        #ifdef MTK_SKIA_USE_ION
         result = MDPResizer(hwBuffer, fIonClientHnd, srcAllocator.getFD(), width, height, sc, &bitmap, colorType, enTdshp, nullptr, fISOSpeedRatings);
-		#else
+        #else
         result = MDPResizer(hwBuffer, 0, -1, width, height, sc, &bitmap, colorType, enTdshp, nullptr, fISOSpeedRatings);
-		#endif
+        #endif
 
         if(!result && ++try_times < 5)
         {
