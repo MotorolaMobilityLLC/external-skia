@@ -52,13 +52,13 @@ void* allocateIONBuffer(int ionClientHnd, ion_user_handle_t *ionAllocHnd, int *b
     ret = ion_alloc(ionClientHnd, size, 0, ION_HEAP_MULTIMEDIA_MASK, ION_FLAG_CACHED | ION_FLAG_CACHED_NEEDS_SYNC, ionAllocHnd);
     if (ret)
     {
-         SkCodecPrintf("allocateIONBuffer ion_alloc failed (%d, %d, %d)\n", ionClientHnd, size, *ionAllocHnd);
+         SkCodecPrintf("allocateIONBuffer ion_alloc failed (%d, %lu, %d)\n", ionClientHnd, size, *ionAllocHnd);
          return 0;
     }
     ret = ion_map(ionClientHnd, *ionAllocHnd, size, PROT_READ | PROT_WRITE, MAP_SHARED, 0, &bufAddr, bufferFD);
     if (ret)
     {
-        SkCodecPrintf("allocateIONBuffer ion_mmap failed (%d, %d, %d)\n", ionClientHnd, size, *bufferFD);
+        SkCodecPrintf("allocateIONBuffer ion_mmap failed (%d, %lu, %d)\n", ionClientHnd, size, *bufferFD);
         close(*bufferFD);
         ret = ion_free(ionClientHnd, *ionAllocHnd);
         return 0;
@@ -71,7 +71,7 @@ void freeIONBuffer(int ionClientHnd, ion_user_handle_t ionAllocHnd, void* buffer
     {
         int ret = munmap(bufferAddr, size);
         if (ret < 0)
-            SkCodecPrintf("onDecodeHW ion_munmap failed (%d, %p, %d)\n", ionClientHnd, bufferAddr, size);
+            SkCodecPrintf("onDecodeHW ion_munmap failed (%d, %p, %lu)\n", ionClientHnd, bufferAddr, size);
     }
     if (bufferFD != -1)
     {
@@ -96,40 +96,40 @@ int IONVaToMva(int ionClientHnd, unsigned long va, unsigned int size, unsigned i
    struct ion_custom_data custom_data;
    ret = ion_alloc(ionClientHnd, size, va, ION_HEAP_MULTIMEDIA_MAP_MVA_MASK, 3, &ion_user_handle);
    if (ret < 0) {
-		SkCodecPrintf("ion_alloc fail\n");
-		return ret;
-	}
-	mm_data.mm_cmd = ION_MM_CONFIG_BUFFER;
-	mm_data.config_buffer_param.eModuleID = 5;
-	mm_data.config_buffer_param.coherent = 0;
-	mm_data.config_buffer_param.security = 0;
-	mm_data.config_buffer_param.handle = ion_user_handle;
+        SkCodecPrintf("ion_alloc fail\n");
+        return ret;
+    }
+    mm_data.mm_cmd = ION_MM_CONFIG_BUFFER;
+    mm_data.config_buffer_param.eModuleID = 5;
+    mm_data.config_buffer_param.coherent = 0;
+    mm_data.config_buffer_param.security = 0;
+    mm_data.config_buffer_param.handle = ion_user_handle;
 
-	custom_data.cmd = ION_CMD_MULTIMEDIA;
-	custom_data.arg = (unsigned long)&mm_data;
-	ret = ioctl(ionClientHnd, ION_IOC_CUSTOM, &custom_data);
-	if (ret < 0) {
-		SkCodecPrintf("ion config buffer fail\n");
-		return ret;
-	}
+    custom_data.cmd = ION_CMD_MULTIMEDIA;
+    custom_data.arg = (unsigned long)&mm_data;
+    ret = ioctl(ionClientHnd, ION_IOC_CUSTOM, &custom_data);
+    if (ret < 0) {
+        SkCodecPrintf("ion config buffer fail\n");
+        return ret;
+    }
 
-	sys_data.sys_cmd = ION_SYS_GET_PHYS;
-	sys_data.get_phys_param.handle = ion_user_handle;
-	sys_data.get_phys_param.len = size;
+    sys_data.sys_cmd = ION_SYS_GET_PHYS;
+    sys_data.get_phys_param.handle = ion_user_handle;
+    sys_data.get_phys_param.len = size;
 
-	custom_data.cmd = ION_CMD_SYSTEM;
-	custom_data.arg = (unsigned long)&sys_data;
+    custom_data.cmd = ION_CMD_SYSTEM;
+    custom_data.arg = (unsigned long)&sys_data;
 
-	ret = ioctl(ionClientHnd, ION_IOC_CUSTOM, &custom_data);
-	if (ret < 0) {
-		SkCodecPrintf("ion get phys fail\n");
-		return ret;
-	}
-	*mva = sys_data.get_phys_param.phy_addr;
-	SkCodecPrintf("va 0x%lx, size %d,phy_addr 0x%x,mav 0x%x",va,size,sys_data.get_phys_param.phy_addr,*mva);
+    ret = ioctl(ionClientHnd, ION_IOC_CUSTOM, &custom_data);
+    if (ret < 0) {
+        SkCodecPrintf("ion get phys fail\n");
+        return ret;
+    }
+    *mva = sys_data.get_phys_param.phy_addr;
+    SkCodecPrintf("va 0x%lx, size %d,phy_addr 0x%x,mav 0x%x",va,size,sys_data.get_phys_param.phy_addr,*mva);
 
-	*handleToBeFree = ion_user_handle;
-	return 1;
+    *handleToBeFree = ion_user_handle;
+    return 1;
 }
 
 unsigned int getISOSpeedRatings(void *buffer, unsigned int size)
@@ -317,36 +317,32 @@ bool ImgPostProc(void* src, int ionClientHnd, int srcFD, void* dst, int width, i
     if((colorType == kRGBA_8888_SkColorType) ||
        (colorType == kRGB_565_SkColorType))
     {
-    	sp<IMms> IMms_service = IMms::tryGetService();
-    	if (IMms_service == nullptr)
-    	{
+        sp<IMms> IMms_service = IMms::tryGetService();
+        if (IMms_service == nullptr)
+        {
             SkCodecPrintf("cannot find IMms_service!");
             return false;
-    	}
-    	MDPParam mdpParam;
-    	memset(&mdpParam, 0, sizeof(MDPParam));
-    	mdpParam.src_planeNumber = 1;
-    	unsigned int src_size = 0;
-    	unsigned int src_pByte = 4;
-
-        switch(colorType)
-        {
-            case kRGBA_8888_SkColorType:
-                mdpParam.dst_format = eRGBX8888;
-                src_pByte = 4;
-                break;
-            case kRGB_565_SkColorType:
-                mdpParam.dst_format = eRGB565;
-                src_pByte = 2;
-                break;
-            default :
-                SkCodecPrintf("ImgPostProc : invalid bitmap config %d!!\n", colorType);
-                return false;
         }
-    	mdpParam.src_format = mdpParam.dst_format ;
-    	src_size = rowBytes * height;
+        MDPParam mdpParam;
+        memset(&mdpParam, 0, sizeof(MDPParam));
+        mdpParam.src_planeNumber = 1;
+        unsigned int src_size = 0;
+        unsigned int src_pByte = 4;
+
+        if(colorType == kRGBA_8888_SkColorType)
+        {
+            mdpParam.dst_format = eRGBX8888;
+            src_pByte = 4;
+        }
+        else
+        {
+            mdpParam.dst_format = eRGB565;
+            src_pByte = 2;
+        }
+        mdpParam.src_format = mdpParam.dst_format ;
+        src_size = rowBytes * height;
         mdpParam.src_sizeList[0] = src_size;
-    	SkCodecPrintf("ImgPostProc: wh (%d %d)->(%d %d), fmt %d, size %d->%d, regionPQ %d!!\n", width, height, width, height
+        SkCodecPrintf("ImgPostProc: wh (%d %d)->(%d %d), fmt %d, size %d->%d, regionPQ %d!!\n", width, height, width, height
         , colorType, src_size, src_size, tdsp);
 
         mdpParam.pq_param.enable = (tdsp == 0)? false:true;
@@ -371,70 +367,62 @@ bool ImgPostProc(void* src, int ionClientHnd, int srcFD, void* dst, int width, i
             return false;
         }
 
-    	mdpParam.src_rect.x = 0;
-    	mdpParam.src_rect.y = 0;
-    	mdpParam.src_rect.w = width;
-    	mdpParam.src_rect.h = height;
-    	mdpParam.src_width = width;
-    	mdpParam.src_height = height;
-    	mdpParam.src_yPitch = rowBytes;
-    	mdpParam.src_profile = MMS_PROFILE_ENUM::MMS_PROFILE_JPEG;
+        mdpParam.src_rect.x = 0;
+        mdpParam.src_rect.y = 0;
+        mdpParam.src_rect.w = width;
+        mdpParam.src_rect.h = height;
+        mdpParam.src_width = width;
+        mdpParam.src_height = height;
+        mdpParam.src_yPitch = rowBytes;
+        mdpParam.src_profile = MMS_PROFILE_ENUM::MMS_PROFILE_JPEG;
 
         // set dst buffer
         ion_user_handle_t ionAllocHnd = 0;
         int dstFD = 0;
         void* dstBuffer = NULL;
-    	unsigned int dst_size = 0;
-    	int dst_ion_handle_tobe_free;
-    	mdpParam.dst_planeNumber = 1;
+        unsigned int dst_size = 0;
+        int dst_ion_handle_tobe_free;
+        mdpParam.dst_planeNumber = 1;
 
-    	if (srcFD >= 0)
-    	{
-            uint32_t dst_mva = 0 ;
-            dst_size = src_size;
-            mdpParam.dst_sizeList[0] = dst_size;
-            dstBuffer = allocateIONBuffer(ionClientHnd, &ionAllocHnd, &dstFD, dst_size);
-            IONVaToMva(ionClientHnd, (unsigned long)dstBuffer, dst_size, &dst_mva, &dst_ion_handle_tobe_free);
-            mdpParam.dst_MVAList[0] = dst_mva;
-            SkCodecPrintf("ImgPostProc allocateIONBuffer src:(%d), dst:(%d, %d, %d, %d, 0x%x)",
-                    srcFD, ionClientHnd, ionAllocHnd, dstFD, dst_size, mdpParam.dst_MVAList[0]);
-    	}
-        else
+        uint32_t dst_mva = 0 ;
+        dst_size = src_size;
+        mdpParam.dst_sizeList[0] = dst_size;
+        dstBuffer = allocateIONBuffer(ionClientHnd, &ionAllocHnd, &dstFD, dst_size);
+        IONVaToMva(ionClientHnd, (unsigned long)dstBuffer, dst_size, &dst_mva, &dst_ion_handle_tobe_free);
+        mdpParam.dst_MVAList[0] = dst_mva;
+        SkCodecPrintf("ImgPostProc allocateIONBuffer src:(%d), dst:(%d, %d, %d, %d, 0x%x)",
+                srcFD, ionClientHnd, ionAllocHnd, dstFD, dst_size, mdpParam.dst_MVAList[0]);
+
+        mdpParam.dst_rect.x = 0;
+        mdpParam.dst_rect.y = 0;
+        mdpParam.dst_rect.w = width;
+        mdpParam.dst_rect.h = height;
+        mdpParam.dst_width = width;
+        mdpParam.dst_height = height;
+        mdpParam.dst_yPitch = rowBytes;
+        mdpParam.dst_profile = MMS_PROFILE_ENUM::MMS_PROFILE_JPEG;
+
+        IMms_service->BlitStream(mdpParam);
+
+        // if dstBuffer is not NULL, need to copy pixels to bitmap and free ION buffer
+        if (dstBuffer != NULL)
         {
-            SkCodecPrintf("ImgPostProc: src fd %d < 0", srcFD);
-            return false;
-        }
-
-    	mdpParam.dst_rect.x = 0;
-    	mdpParam.dst_rect.y = 0;
-    	mdpParam.dst_rect.w = width;
-    	mdpParam.dst_rect.h = height;
-    	mdpParam.dst_width = width;
-    	mdpParam.dst_height = height;
-    	mdpParam.dst_yPitch = rowBytes;
-    	mdpParam.dst_profile = MMS_PROFILE_ENUM::MMS_PROFILE_JPEG;
-
-    	IMms_service->BlitStream(mdpParam);
-
-    	// if dstBuffer is not NULL, need to copy pixels to bitmap and free ION buffer
-    	if (dstBuffer != NULL)
-    	{
             memcpy(dst, dstBuffer, src_size);
             freeIONBuffer(ionClientHnd, ionAllocHnd, dstBuffer, dstFD, src_size);
         }
 
-    	if(src_ion_handle_tobe_free < 0)
-    	{
+        if(src_ion_handle_tobe_free < 0)
+        {
             SkCodecPrintf("src  ion_free_handle(%d)  \n", src_ion_handle_tobe_free);
             ion_free(ionClientHnd, src_ion_handle_tobe_free);
-    	}
+        }
 
-    	if(dst_ion_handle_tobe_free < 0)
-    	{
+        if(dst_ion_handle_tobe_free < 0)
+        {
             SkCodecPrintf("dst  ion_free_handle(%d)  \n", dst_ion_handle_tobe_free);
             ion_free(ionClientHnd, dst_ion_handle_tobe_free);
-    	}
-    	return true;
+        }
+        return true;
     }
     return false;
 }
@@ -459,7 +447,7 @@ bool LoadInputStreamToMem(SkStream* stream, SkStream **mstream)
             if(allocMemory == nullptr)
                 return false;
             bytes_read = stream->read(allocMemory.get(), length);
-            SkCodecPrintf("stream getLength() supported, buffer addr %p length %d\n", allocMemory.get(), length);
+            SkCodecPrintf("stream getLength() supported, buffer addr %p length %lu\n", allocMemory.get(), length);
         }
         // stream does not support length, need to use temp buffer for loading stream
         else
@@ -492,7 +480,7 @@ bool LoadInputStreamToMem(SkStream* stream, SkStream **mstream)
                 length += bytes_read;
                 bytes_read = stream->read(tmpReadBuffer.get(), READ_BUFFER_SIZE);
             }
-            SkCodecPrintf("stream getLength() not supported, use temp buffer for loading stream, buffer addr %p length %d\n", allocMemory.get(), length);
+            SkCodecPrintf("stream getLength() not supported, use temp buffer for loading stream, buffer addr %p length %lu\n", allocMemory.get(), length);
         }
         *mstream = new SkMemoryStream(allocMemory.get(), length, true);
         return true;
@@ -1114,7 +1102,7 @@ int SkJpegCodec::readRows_MTK(const SkImageInfo& dstInfo, void* dst, size_t rowB
             fIsSampleDecode = true;
             fFirstTileDone = true;
             fUseHWResizer = false;
-            SkCodecPrintf("SkJpegCodec::onGetScanlines SampleDecode region(%d, %d), size %d, tmpBuffer %p, dstAddr %p\n",
+            SkCodecPrintf("SkJpegCodec::onGetScanlines SampleDecode region(%d, %d), size %lu, tmpBuffer %p, dstAddr %p\n",
                 outputWidth / fSwizzler->sampleX(),
                 outputHeight / fSwizzler->sampleX(),
                 rowBytes * outputHeight / fSwizzler->sampleX(),
