@@ -232,6 +232,10 @@ char* SkRegion::toString() {
     }
     // 4 ints, up to 10 digits each plus sign, 3 commas, '(', ')', SkRegion() and '\0'
     const int max = (count*((11*4)+5))+11+1;
+    if (max > INT_MAX) {
+        SkDebugf("SkRegion max = %d", max);
+        return nullptr;
+    }
     char* result = (char*)sk_malloc_throw(max);
     if (result == nullptr) {
         return nullptr;
@@ -240,9 +244,17 @@ char* SkRegion::toString() {
     iter.reset(*this);
     while (!iter.done()) {
         const SkIRect& r = iter.rect();
+        if (max < count) {
+            SkDebugf("In while loop ,SkRegion max=%d, count = %d", max,count);
+            return nullptr;
+        }
         count += snprintf(result+count, max - count,
                 "(%d,%d,%d,%d)", r.fLeft, r.fTop, r.fRight, r.fBottom);
         iter.next();
+    }
+    if (max < count) {
+        SkDebugf("SkRegion max=%d, count = %d", max,count);
+        return nullptr;
     }
     count += snprintf(result+count, max - count, ")");
     return result;
