@@ -52,13 +52,13 @@ void* allocateIONBuffer(int ionClientHnd, ion_user_handle_t *ionAllocHnd, int *b
     ret = ion_alloc(ionClientHnd, size, 0, ION_HEAP_MULTIMEDIA_MASK, ION_FLAG_CACHED | ION_FLAG_CACHED_NEEDS_SYNC, ionAllocHnd);
     if (ret)
     {
-         SkCodecPrintf("allocateIONBuffer ion_alloc failed (%d, %lu, %d)\n", ionClientHnd, size, *ionAllocHnd);
+         SkCodecPrintf("allocateIONBuffer ion_alloc failed (%d, %zu, %d)\n", ionClientHnd, size, *ionAllocHnd);
          return 0;
     }
     ret = ion_map(ionClientHnd, *ionAllocHnd, size, PROT_READ | PROT_WRITE, MAP_SHARED, 0, &bufAddr, bufferFD);
     if (ret)
     {
-        SkCodecPrintf("allocateIONBuffer ion_mmap failed (%d, %lu, %d)\n", ionClientHnd, size, *bufferFD);
+        SkCodecPrintf("allocateIONBuffer ion_mmap failed (%d, %zu, %d)\n", ionClientHnd, size, *bufferFD);
         close(*bufferFD);
         ret = ion_free(ionClientHnd, *ionAllocHnd);
         return 0;
@@ -71,7 +71,7 @@ void freeIONBuffer(int ionClientHnd, ion_user_handle_t ionAllocHnd, void* buffer
     {
         int ret = munmap(bufferAddr, size);
         if (ret < 0)
-            SkCodecPrintf("onDecodeHW ion_munmap failed (%d, %p, %lu)\n", ionClientHnd, bufferAddr, size);
+            SkCodecPrintf("onDecodeHW ion_munmap failed (%d, %p, %zu)\n", ionClientHnd, bufferAddr, size);
     }
     if (bufferFD != -1)
     {
@@ -447,7 +447,7 @@ bool LoadInputStreamToMem(SkStream* stream, SkStream **mstream)
             if(allocMemory == nullptr)
                 return false;
             bytes_read = stream->read(allocMemory.get(), length);
-            SkCodecPrintf("stream getLength() supported, buffer addr %p length %lu\n", allocMemory.get(), length);
+            SkCodecPrintf("stream getLength() supported, buffer addr %p length %zu\n", allocMemory.get(), length);
         }
         // stream does not support length, need to use temp buffer for loading stream
         else
@@ -480,7 +480,7 @@ bool LoadInputStreamToMem(SkStream* stream, SkStream **mstream)
                 length += bytes_read;
                 bytes_read = stream->read(tmpReadBuffer.get(), READ_BUFFER_SIZE);
             }
-            SkCodecPrintf("stream getLength() not supported, use temp buffer for loading stream, buffer addr %p length %lu\n", allocMemory.get(), length);
+            SkCodecPrintf("stream getLength() not supported, use temp buffer for loading stream, buffer addr %p length %zu\n", allocMemory.get(), length);
         }
         *mstream = new SkMemoryStream(allocMemory.get(), length, true);
         return true;
@@ -1102,7 +1102,7 @@ int SkJpegCodec::readRows_MTK(const SkImageInfo& dstInfo, void* dst, size_t rowB
             fIsSampleDecode = true;
             fFirstTileDone = true;
             fUseHWResizer = false;
-            SkCodecPrintf("SkJpegCodec::onGetScanlines SampleDecode region(%d, %d), size %lu, tmpBuffer %p, dstAddr %p\n",
+            SkCodecPrintf("SkJpegCodec::onGetScanlines SampleDecode region(%d, %d), size %zu, tmpBuffer %p, dstAddr %p\n",
                 outputWidth / fSwizzler->sampleX(),
                 outputHeight / fSwizzler->sampleX(),
                 rowBytes * outputHeight / fSwizzler->sampleX(),
@@ -1341,7 +1341,7 @@ SkCodec::Result SkJpegCodec::onGetPixels(const SkImageInfo& dstInfo,
             return decoderMgr->returnFailure_MTK("ReadHeader", kInvalidInput);
         }
         decoderMgr->init_MTK();
-        //decoderMgr->dinfo_MTK()->multithread_decode = true; // Enable SW full image opt.
+        decoderMgr->dinfo_MTK()->multithread_decode = true; // Enable SW full image opt.
 
         switch (jpeg_read_header_ALPHA(decoderMgr->dinfo_MTK(), true)) {
             case JPEG_HEADER_OK_ALPHA:
@@ -1353,6 +1353,7 @@ SkCodec::Result SkJpegCodec::onGetPixels(const SkImageInfo& dstInfo,
         }
         decoderMgr->dinfo_MTK()->scale_num = fDecoderMgr->dinfo_MTK()->scale_num;
         decoderMgr->dinfo_MTK()->scale_denom = fDecoderMgr->dinfo_MTK()->scale_denom;
+        decoderMgr->dinfo_MTK()->out_color_space = fDecoderMgr->dinfo_MTK()->out_color_space;
         SkASSERT(nullptr != decoderMgr);
         fDecoderMgr.reset(decoderMgr.release());
         auto_clean_stream.set(mstream);
