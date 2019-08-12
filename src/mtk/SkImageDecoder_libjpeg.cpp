@@ -808,7 +808,7 @@ bool MDPResizer(void* src, int ionClientHnd, int srcFD, int width, int height, S
 
         src_size = width * height * src_pByte ;
         mdpParam.src_sizeList[0] = src_size;
-        SkDebugf("MDPResizer: wh (%d %d)->(%d %d), fmt %d->%d, size %d->%lu, regionPQ %d!!\n", width, height, bm->width(), bm->height()
+        SkDebugf("MDPResizer: wh (%d %d)->(%d %d), fmt %d->%d, size %d->%zu, regionPQ %d!!\n", width, height, bm->width(), bm->height()
         ,sc, colorType, src_size, bm->rowBytes() * bm->height(), tdsp);
 
         {
@@ -943,6 +943,11 @@ bool SkJPEGImageDecoder::onDecodeSubset(SkBitmap* bm, SkBRDAllocator* allocator,
         cinfo = (jpeg_decompress_struct_ALPHA *)malloc(sizeof(struct jpeg_decompress_struct_ALPHA));
         if(cinfo != nullptr)
             memset(cinfo, 0, sizeof(struct jpeg_decompress_struct_ALPHA));
+        else
+        {
+            delete sk_stream;
+            return false;
+        }
         auto_clean_cinfo.set(cinfo);
 
         skjpeg_error_mgr_MTK sk_err;
@@ -984,6 +989,7 @@ bool SkJPEGImageDecoder::onDecodeSubset(SkBitmap* bm, SkBRDAllocator* allocator,
 
         auto_clean_stream.set(stream);
     }
+    else return false;
 
     SkIRect rect = SkIRect::MakeWH(fImageWidth, fImageHeight);
     if (!rect.intersect(region)) {
