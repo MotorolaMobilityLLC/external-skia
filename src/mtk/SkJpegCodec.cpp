@@ -16,6 +16,7 @@
 #include "SkTemplates.h"
 #include "SkTo.h"
 #include "SkTypes.h"
+#include "native_handle.h"
 
 // stdio is needed for libjpeg-turbo
 #include <stdio.h>
@@ -31,11 +32,11 @@
 #include <linux/ion_drv.h>
 
 #include <vendor/mediatek/hardware/mms/1.2/IMms.h>
-using ::vendor::mediatek::hardware::mms::V1_2::IMms;
-using ::vendor::mediatek::hardware::mms::V1_2::MDPParam;
+#include <vendor/mediatek/hardware/mms/1.3/IMms.h>
+using ::vendor::mediatek::hardware::mms::V1_3::IMms;
+using ::vendor::mediatek::hardware::mms::V1_3::MDPParamFD;
 using ::vendor::mediatek::hardware::mms::V1_2::MMS_PROFILE_ENUM;
 using ::vendor::mediatek::hardware::mms::V1_2::MMS_MEDIA_TYPE_ENUM;
-using ::vendor::mediatek::hardware::mms::V1_1::DpRect;
 using namespace android;
 
 #undef LOG_TAG
@@ -59,7 +60,6 @@ void* allocateIONBuffer(int ionClientHnd, ion_user_handle_t *ionAllocHnd, int *b
     if (ret)
     {
         SkCodecPrintf("allocateIONBuffer ion_mmap failed (%d, %zu, %d)\n", ionClientHnd, size, *bufferFD);
-        close(*bufferFD);
         ret = ion_free(ionClientHnd, *ionAllocHnd);
         return 0;
     }
@@ -71,18 +71,18 @@ void freeIONBuffer(int ionClientHnd, ion_user_handle_t ionAllocHnd, void* buffer
     {
         int ret = munmap(bufferAddr, size);
         if (ret < 0)
-            SkCodecPrintf("onDecodeHW ion_munmap failed (%d, %p, %zu)\n", ionClientHnd, bufferAddr, size);
+            SkCodecPrintf("freeIONBuffer munmap failed (%d, %p, %zu)\n", ionClientHnd, bufferAddr, size);
     }
     if (bufferFD != -1)
     {
         if (close(bufferFD))
         {
-            SkCodecPrintf("onDecodeHW close failed (%d, %d)\n", ionClientHnd, bufferFD);
+            SkCodecPrintf("freeIONBuffer close failed (%d, %d)\n", ionClientHnd, bufferFD);
         }
     }
     if (ion_free(ionClientHnd, ionAllocHnd))
     {
-        SkCodecPrintf("onDecodeHW ion_free failed (%d, %d)\n", ionClientHnd, bufferFD);
+        SkCodecPrintf("freeIONBuffer ion_free failed (%d, %d)\n", ionClientHnd, bufferFD);
     }
 }
 
@@ -323,8 +323,10 @@ bool ImgPostProc(void* src, int ionClientHnd, int srcFD, void* dst, int width, i
             SkCodecPrintf("cannot find IMms_service!");
             return false;
         }
-        MDPParam mdpParam;
-        memset(&mdpParam, 0, sizeof(MDPParam));
+        MDPParamFD mdpParam;
+        native_handle_t srcHdl;
+        native_handle_t dstHdl;
+        memset(&mdpParam, 0, sizeof(MDPParamFD));
         mdpParam.src_planeNumber = 1;
         unsigned int src_size = 0;
         unsigned int src_pByte = 4;
@@ -354,12 +356,12 @@ bool ImgPostProc(void* src, int ionClientHnd, int srcFD, void* dst, int width, i
             SkCodecPrintf("ImgPostProc: enable imgDc pParam %p", pPPParam);
         }
 
-        int src_ion_handle_tobe_free;
         if (srcFD >= 0)
         {
-            uint32_t src_mva = 0 ;
-            IONVaToMva(ionClientHnd, (unsigned long)src, src_size, &src_mva, &src_ion_handle_tobe_free);
-            mdpParam.src_MVAList[0] = src_mva;
+            srcHdl.numFds = 1;
+            srcHdl.numInts = 0;
+            srcHdl.data[0] = srcFD;
+            mdpParam.inputHandle = &srcHdl;
         }
         else
         {
@@ -378,18 +380,18 @@ bool ImgPostProc(void* src, int ionClientHnd, int srcFD, void* dst, int width, i
 
         // set dst buffer
         ion_user_handle_t ionAllocHnd = 0;
-        int dstFD = 0;
+        int dstFD = -1;
         void* dstBuffer = NULL;
         unsigned int dst_size = 0;
-        int dst_ion_handle_tobe_free;
         mdpParam.dst_planeNumber = 1;
 
-        uint32_t dst_mva = 0 ;
         dst_size = src_size;
         mdpParam.dst_sizeList[0] = dst_size;
         dstBuffer = allocateIONBuffer(ionClientHnd, &ionAllocHnd, &dstFD, dst_size);
-        IONVaToMva(ionClientHnd, (unsigned long)dstBuffer, dst_size, &dst_mva, &dst_ion_handle_tobe_free);
-        mdpParam.dst_MVAList[0] = dst_mva;
+        dstHdl.numFds = 1;
+        dstHdl.numInts = 0;
+        dstHdl.data[0] = dstFD;
+        mdpParam.outputHandle = &dstHdl;
         SkCodecPrintf("ImgPostProc allocateIONBuffer src:(%d), dst:(%d, %d, %d, %d, 0x%x)",
                 srcFD, ionClientHnd, ionAllocHnd, dstFD, dst_size, mdpParam.dst_MVAList[0]);
 
@@ -402,25 +404,13 @@ bool ImgPostProc(void* src, int ionClientHnd, int srcFD, void* dst, int width, i
         mdpParam.dst_yPitch = rowBytes;
         mdpParam.dst_profile = MMS_PROFILE_ENUM::MMS_PROFILE_JPEG;
 
-        IMms_service->BlitStream(mdpParam);
+        IMms_service->BlitStreamFD(mdpParam);
 
         // if dstBuffer is not NULL, need to copy pixels to bitmap and free ION buffer
         if (dstBuffer != NULL)
         {
             memcpy(dst, dstBuffer, src_size);
             freeIONBuffer(ionClientHnd, ionAllocHnd, dstBuffer, dstFD, src_size);
-        }
-
-        if(src_ion_handle_tobe_free < 0)
-        {
-            SkCodecPrintf("src  ion_free_handle(%d)  \n", src_ion_handle_tobe_free);
-            ion_free(ionClientHnd, src_ion_handle_tobe_free);
-        }
-
-        if(dst_ion_handle_tobe_free < 0)
-        {
-            SkCodecPrintf("dst  ion_free_handle(%d)  \n", dst_ion_handle_tobe_free);
-            ion_free(ionClientHnd, dst_ion_handle_tobe_free);
         }
         return true;
     }

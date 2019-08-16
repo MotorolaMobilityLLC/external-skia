@@ -50,6 +50,7 @@ func mtkJpegEnhanceSkiaDefaults(ctx android.LoadHookContext) {
 	//jpeg non-local dirs
 	includeDirs = append(includeDirs, "system/core/libion/include/")		//ion/ion.h
 	includeDirs = append(includeDirs, "system/core/include/utils/")
+	includeDirs = append(includeDirs, "system/core/include/cutils/")		// native_handle.h
 	includeDirs = append(includeDirs, "vendor/mediatek/proprietary/external/")	//libion_mtk/include/ion.h
 	includeDirs = append(includeDirs, "device/mediatek/common/kernel-headers/")		//linux/mtk_ion.h
 	includeDirs = append(includeDirs, "vendor/mediatek/proprietary/external/libjpeg-alpha/include/")
@@ -76,6 +77,7 @@ func mtkJpegEnhanceSkiaDefaults(ctx android.LoadHookContext) {
 	sharedlibs = append(sharedlibs, "vendor.mediatek.hardware.mms@1.0")
 	sharedlibs = append(sharedlibs, "vendor.mediatek.hardware.mms@1.1")
 	sharedlibs = append(sharedlibs, "vendor.mediatek.hardware.mms@1.2")
+	sharedlibs = append(sharedlibs, "vendor.mediatek.hardware.mms@1.3")
 
 	p.Target.Android.Local_include_dirs = localIncludeDirs
 	p.Target.Android.Include_dirs = includeDirs

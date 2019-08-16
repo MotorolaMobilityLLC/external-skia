@@ -24,6 +24,7 @@
 #include "SkCanvas.h"
 #include "SkMath.h"
 #include "SkJpegCodec_MTK.h"
+#include "native_handle.h"
 
 #include <sys/mman.h>
 #include <cutils/ashmem.h>
@@ -33,12 +34,12 @@
   #include <linux/ion.h>
   #include <ion/ion.h>
   #include "DpColorFormat.h"
+  #include <vendor/mediatek/hardware/mms/1.3/IMms.h>
   #include <vendor/mediatek/hardware/mms/1.2/IMms.h>
-  using ::vendor::mediatek::hardware::mms::V1_2::IMms;
-  using ::vendor::mediatek::hardware::mms::V1_2::MDPParam;
+  using ::vendor::mediatek::hardware::mms::V1_3::IMms;
+  using ::vendor::mediatek::hardware::mms::V1_3::MDPParamFD;
   using ::vendor::mediatek::hardware::mms::V1_2::MMS_PROFILE_ENUM;
   using ::vendor::mediatek::hardware::mms::V1_2::MMS_MEDIA_TYPE_ENUM;
-  using ::vendor::mediatek::hardware::mms::V1_1::DpRect;
   using namespace android;
   #define MTK_SKIA_USE_ION
   #define ION_HEAP_MULTIMEDIA_MASK (1 << 10)
@@ -768,8 +769,10 @@ bool MDPResizer(void* src, int ionClientHnd, int srcFD, int width, int height, S
             SkDebugf("cannot find IMms_service!");
             return false;
         }
-        MDPParam mdpParam;
-        memset(&mdpParam, 0, sizeof(MDPParam));
+        MDPParamFD mdpParam;
+        native_handle_t srcHdl;
+        native_handle_t dstHdl;
+        memset(&mdpParam, 0, sizeof(MDPParamFD));
         unsigned int src_size = 0;
         unsigned int src_pByte = 4;
         mdpParam.src_planeNumber = 1;
@@ -822,13 +825,12 @@ bool MDPResizer(void* src, int ionClientHnd, int srcFD, int width, int height, S
             }
         }
 
-        //SkDebugf("MDPResizer: CONFIG_SRC_BUF, go L:%d!!\n", __LINE__);
-        int src_ion_handle_tobe_free;
         if (srcFD >= 0)
         {
-            uint32_t src_mva = 0 ;
-            IONVaToMva(ionClientHnd, (unsigned long)src, src_size, &src_mva, &src_ion_handle_tobe_free);
-            mdpParam.src_MVAList[0] = src_mva;
+            srcHdl.numFds = 1;
+            srcHdl.numInts = 0;
+            srcHdl.data[0] = srcFD;
+            mdpParam.inputHandle = &srcHdl;
         }
         else
             return false;
@@ -843,22 +845,21 @@ bool MDPResizer(void* src, int ionClientHnd, int srcFD, int width, int height, S
         mdpParam.src_profile = MMS_PROFILE_ENUM::MMS_PROFILE_JPEG;
 
         // set dst buffer
-        ///SkDebugf("MDPResizer: CONFIG_DST_BUF, go L:%d!!\n", __LINE__);
         ion_user_handle_t ionAllocHnd = 0;
-        int dstFD = 0;
+        int dstFD = -1;
         void* dstBuffer = nullptr;
         unsigned int dst_size = 0;
         unsigned int skBitmapSize_MTK = bm->height() * bm->rowBytes();
         mdpParam.dst_planeNumber = 1;
-        // if srcFD >= 0, need to use ion for buffer allocation
-        int dst_ion_handle_tobe_free;
 
-        uint32_t dst_mva = 0 ;
         dst_size = skBitmapSize_MTK;
         mdpParam.dst_sizeList[0] = dst_size;
         dstBuffer = allocateIONBuffer(ionClientHnd, &ionAllocHnd, &dstFD, dst_size);
-        IONVaToMva(ionClientHnd, (unsigned long)dstBuffer, dst_size, &dst_mva, &dst_ion_handle_tobe_free);
-        mdpParam.dst_MVAList[0] = dst_mva;
+
+        dstHdl.numFds = 1;
+        dstHdl.numInts = 0;
+        dstHdl.data[0] = dstFD;
+        mdpParam.outputHandle = &dstHdl;
         SkDebugf("MDPResizer allocateIONBuffer src:(%d), dst:(%d, %d, %d, %d, %p)",
                     srcFD, ionClientHnd, ionAllocHnd, dstFD, dst_size, dstBuffer);
 
@@ -871,10 +872,7 @@ bool MDPResizer(void* src, int ionClientHnd, int srcFD, int width, int height, S
         mdpParam.dst_yPitch = bm->rowBytes();
         mdpParam.dst_profile = MMS_PROFILE_ENUM::MMS_PROFILE_JPEG;
 
-        //SkDebugf("MDPResizer: CONFIG_DST_SIZE, go L:%d!!\n", __LINE__);
-
-        //SkDebugf("MDPResizer: GO_BITBLIT, go L:%d!!\n", __LINE__);
-        IMms_service->BlitStream(mdpParam);
+        IMms_service->BlitStreamFD(mdpParam);
 
         // if dstBuffer is not nullptr, need to copy pixels to bitmap and free ION buffer
         if (dstBuffer != nullptr)
@@ -883,17 +881,6 @@ bool MDPResizer(void* src, int ionClientHnd, int srcFD, int width, int height, S
             freeIONBuffer(ionClientHnd, ionAllocHnd, dstBuffer, dstFD, skBitmapSize_MTK);
         }
 
-        if(src_ion_handle_tobe_free != -1)
-        {
-            SkDebugf("src  ion_free_handle(%d)  \n", src_ion_handle_tobe_free);
-            ion_free(ionClientHnd, src_ion_handle_tobe_free);
-        }
-
-        if(dst_ion_handle_tobe_free != -1)
-        {
-            SkDebugf("dst  ion_free_handle(%d)  \n", dst_ion_handle_tobe_free);
-            ion_free(ionClientHnd, dst_ion_handle_tobe_free);
-        }
         return true;
     }
     return false;
