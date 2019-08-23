@@ -872,7 +872,16 @@ bool MDPResizer(void* src, int ionClientHnd, int srcFD, int width, int height, S
         mdpParam.dst_yPitch = bm->rowBytes();
         mdpParam.dst_profile = MMS_PROFILE_ENUM::MMS_PROFILE_JPEG;
 
-        IMms_service->BlitStreamFD(mdpParam);
+        auto ret = IMms_service->BlitStreamFD(mdpParam);
+        if (!ret.isOk())
+        {
+            SkDebugf("IMms_service->BlitStreamFD failed");
+            if (dstBuffer != nullptr)
+            {
+                freeIONBuffer(ionClientHnd, ionAllocHnd, dstBuffer, dstFD, skBitmapSize_MTK);
+            }
+            return false;
+        }
 
         // if dstBuffer is not nullptr, need to copy pixels to bitmap and free ION buffer
         if (dstBuffer != nullptr)
