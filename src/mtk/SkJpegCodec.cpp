@@ -404,7 +404,16 @@ bool ImgPostProc(void* src, int ionClientHnd, int srcFD, void* dst, int width, i
         mdpParam.dst_yPitch = rowBytes;
         mdpParam.dst_profile = MMS_PROFILE_ENUM::MMS_PROFILE_JPEG;
 
-        IMms_service->BlitStreamFD(mdpParam);
+        auto ret = IMms_service->BlitStreamFD(mdpParam);
+        if (!ret.isOk())
+        {
+            SkCodecPrintf("IMms_service->BlitStreamFD failed");
+            if (dstBuffer != NULL)
+            {
+                freeIONBuffer(ionClientHnd, ionAllocHnd, dstBuffer, dstFD, src_size);
+            }
+            return false;
+        }
 
         // if dstBuffer is not NULL, need to copy pixels to bitmap and free ION buffer
         if (dstBuffer != NULL)
