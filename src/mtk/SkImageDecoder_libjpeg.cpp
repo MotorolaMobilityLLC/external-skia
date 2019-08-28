@@ -770,8 +770,8 @@ bool MDPResizer(void* src, int ionClientHnd, int srcFD, int width, int height, S
             return false;
         }
         MDPParamFD mdpParam;
-        native_handle_t srcHdl;
-        native_handle_t dstHdl;
+        native_handle_t* srcHdl;
+        native_handle_t* dstHdl;
         memset(&mdpParam, 0, sizeof(MDPParamFD));
         unsigned int src_size = 0;
         unsigned int src_pByte = 4;
@@ -827,10 +827,9 @@ bool MDPResizer(void* src, int ionClientHnd, int srcFD, int width, int height, S
 
         if (srcFD >= 0)
         {
-            srcHdl.numFds = 1;
-            srcHdl.numInts = 0;
-            srcHdl.data[0] = srcFD;
-            mdpParam.inputHandle = &srcHdl;
+            srcHdl = native_handle_create(1, 0);
+            srcHdl->data[0] = srcFD;
+            mdpParam.inputHandle = srcHdl;
         }
         else
             return false;
@@ -856,10 +855,9 @@ bool MDPResizer(void* src, int ionClientHnd, int srcFD, int width, int height, S
         mdpParam.dst_sizeList[0] = dst_size;
         dstBuffer = allocateIONBuffer(ionClientHnd, &ionAllocHnd, &dstFD, dst_size);
 
-        dstHdl.numFds = 1;
-        dstHdl.numInts = 0;
-        dstHdl.data[0] = dstFD;
-        mdpParam.outputHandle = &dstHdl;
+        dstHdl = native_handle_create(1, 0);
+        dstHdl->data[0] = dstFD;
+        mdpParam.outputHandle = dstHdl;
         SkDebugf("MDPResizer allocateIONBuffer src:(%d), dst:(%d, %d, %d, %d, %p)",
                     srcFD, ionClientHnd, ionAllocHnd, dstFD, dst_size, dstBuffer);
 
@@ -880,6 +878,8 @@ bool MDPResizer(void* src, int ionClientHnd, int srcFD, int width, int height, S
             {
                 freeIONBuffer(ionClientHnd, ionAllocHnd, dstBuffer, dstFD, skBitmapSize_MTK);
             }
+            native_handle_delete(srcHdl);
+            native_handle_delete(dstHdl);
             return false;
         }
 
@@ -889,6 +889,9 @@ bool MDPResizer(void* src, int ionClientHnd, int srcFD, int width, int height, S
             memcpy(bm->getPixels(), dstBuffer, skBitmapSize_MTK);
             freeIONBuffer(ionClientHnd, ionAllocHnd, dstBuffer, dstFD, skBitmapSize_MTK);
         }
+
+        native_handle_delete(srcHdl);
+        native_handle_delete(dstHdl);
 
         return true;
     }
