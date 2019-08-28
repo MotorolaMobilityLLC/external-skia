@@ -324,8 +324,8 @@ bool ImgPostProc(void* src, int ionClientHnd, int srcFD, void* dst, int width, i
             return false;
         }
         MDPParamFD mdpParam;
-        native_handle_t srcHdl;
-        native_handle_t dstHdl;
+        native_handle_t *srcHdl;
+        native_handle_t *dstHdl;
         memset(&mdpParam, 0, sizeof(MDPParamFD));
         mdpParam.src_planeNumber = 1;
         unsigned int src_size = 0;
@@ -358,10 +358,9 @@ bool ImgPostProc(void* src, int ionClientHnd, int srcFD, void* dst, int width, i
 
         if (srcFD >= 0)
         {
-            srcHdl.numFds = 1;
-            srcHdl.numInts = 0;
-            srcHdl.data[0] = srcFD;
-            mdpParam.inputHandle = &srcHdl;
+            srcHdl = native_handle_create(1, 0);
+            srcHdl->data[0] = srcFD;
+            mdpParam.inputHandle = srcHdl;
         }
         else
         {
@@ -388,10 +387,10 @@ bool ImgPostProc(void* src, int ionClientHnd, int srcFD, void* dst, int width, i
         dst_size = src_size;
         mdpParam.dst_sizeList[0] = dst_size;
         dstBuffer = allocateIONBuffer(ionClientHnd, &ionAllocHnd, &dstFD, dst_size);
-        dstHdl.numFds = 1;
-        dstHdl.numInts = 0;
-        dstHdl.data[0] = dstFD;
-        mdpParam.outputHandle = &dstHdl;
+
+        dstHdl = native_handle_create(1, 0);
+        dstHdl->data[0] = dstFD;
+        mdpParam.outputHandle = dstHdl;
         SkCodecPrintf("ImgPostProc allocateIONBuffer src:(%d), dst:(%d, %d, %d, %d, 0x%x)",
                 srcFD, ionClientHnd, ionAllocHnd, dstFD, dst_size, mdpParam.dst_MVAList[0]);
 
@@ -412,6 +411,8 @@ bool ImgPostProc(void* src, int ionClientHnd, int srcFD, void* dst, int width, i
             {
                 freeIONBuffer(ionClientHnd, ionAllocHnd, dstBuffer, dstFD, src_size);
             }
+            native_handle_delete(srcHdl);
+            native_handle_delete(dstHdl);
             return false;
         }
 
@@ -421,6 +422,9 @@ bool ImgPostProc(void* src, int ionClientHnd, int srcFD, void* dst, int width, i
             memcpy(dst, dstBuffer, src_size);
             freeIONBuffer(ionClientHnd, ionAllocHnd, dstBuffer, dstFD, src_size);
         }
+
+        native_handle_delete(srcHdl);
+        native_handle_delete(dstHdl);
         return true;
     }
     return false;
