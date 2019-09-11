@@ -257,6 +257,7 @@ public:
             , fSubset(nullptr)
             , fFrameIndex(0)
             , fPriorFrame(kNoFrame)
+            , fRegionHeight(0)
         {}
 
         ZeroInitialized            fZeroInitialized;
@@ -300,6 +301,11 @@ public:
          *  If set to kNoFrame, the codec will decode any necessary required frame(s) first.
          */
         int                        fPriorFrame;
+        /**
+        *  MTK proprietary feature PQ required parameter, this is for sampleDecode
+        *  To do the sampleDecode correctly, region height is required
+        */
+        unsigned int               fRegionHeight;
     };
 
     /**
