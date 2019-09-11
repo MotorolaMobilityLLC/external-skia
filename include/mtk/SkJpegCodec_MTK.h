@@ -259,6 +259,7 @@ private:
     bool                   fFirstTileDone;
     bool                   fUseHWResizer;
     bool                   fEnTdshp;
+    unsigned int           fRegionHeight;
 #endif
 };
 

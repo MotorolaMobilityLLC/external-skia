@@ -821,6 +821,7 @@ SkJpegCodec::SkJpegCodec(SkEncodedInfo&& info, std::unique_ptr<SkStream> stream,
     fFirstTileDone = false;
     fUseHWResizer = false;
     fEnTdshp = false;
+    fRegionHeight = 0x0;
 #endif
 }
 
@@ -1092,7 +1093,8 @@ int SkJpegCodec::readRows_MTK(const SkImageInfo& dstInfo, void* dst, size_t rowB
 
     JSAMPLE* tmpBuffer;
     int outputWidth = (fSwizzlerSubset.isEmpty()) ? fDecoderMgr->dinfo_MTK()->output_width : fSwizzlerSubset.width();
-    int outputHeight = (fSwizzlerSubset.isEmpty()) ? fDecoderMgr->dinfo_MTK()->output_height : fSwizzlerSubset.height();
+    int outputHeight = (fSwizzlerSubset.isEmpty()) ? fDecoderMgr->dinfo_MTK()->output_height :
+        (fRegionHeight == 0) ? fSwizzlerSubset.height() : fRegionHeight;
 
     if ((!fFirstTileDone || fUseHWResizer) && fIonBufferStorage)
     {
@@ -1324,6 +1326,8 @@ SkCodec::Result SkJpegCodec::onGetPixels(const SkImageInfo& dstInfo,
 
     if (dstInfo.width() >= 400 && dstInfo.height() >= 400)
         SkCodecPrintf("SkJpegCodec::onGetPixels +");
+
+    fSwizzlerSubset.setEmpty(); // reset fSwizzlerSubset
 
 #ifdef MTK_JPEG_SW_OPTIMIZATION
     JpgStreamAutoClean auto_clean_stream;
@@ -1643,6 +1647,8 @@ SkCodec::Result SkJpegCodec::onStartScanlineDecode(const SkImageInfo& dstInfo,
         // one row at a time, only the subsetting in the x-dimension matters.
         fSwizzlerSubset.setXYWH(options.fSubset->x() - startX, 0,
                 options.fSubset->width(), options.fSubset->height());
+
+        fRegionHeight = options.fRegionHeight;
 
         // We will need a swizzler if libjpeg-turbo cannot provide the exact
         // subset that we request.
