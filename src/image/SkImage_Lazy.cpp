@@ -285,7 +285,13 @@ sk_sp<SkImage> SkImage::MakeFromGenerator(std::unique_ptr<SkImageGenerator> gene
     SkImage_Lazy::Validator
             validator(SharedGenerator::Make(std::move(generator)), subset, nullptr, nullptr);
 
-    return validator ? sk_make_sp<SkImage_Lazy>(&validator) : nullptr;
+    //add log to judge if the source image has error
+    if (validator){
+        return sk_make_sp<SkImage_Lazy>(&validator);
+    }else{
+        SkDebugf("validator is nullptr please check if there is some error of the image resource");
+        return nullptr;
+    }
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////
