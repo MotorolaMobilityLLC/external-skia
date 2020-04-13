@@ -289,6 +289,7 @@ public:
             , fSubset(nullptr)
             , fFrameIndex(0)
             , fPriorFrame(kNoFrame)
+            , fRegionHeight(0)
         {}
 
         ZeroInitialized            fZeroInitialized;
@@ -332,6 +333,11 @@ public:
          *  If set to kNoFrame, the codec will decode any necessary required frame(s) first.
          */
         int                        fPriorFrame;
+        /**
+        *  MTK proprietary feature PQ required parameter, this is for sampleDecode
+        *  To do the sampleDecode correctly, region height is required
+        */
+        unsigned int               fRegionHeight;
     };
 
     /**
@@ -727,6 +733,11 @@ public:
         return this->onGetRepetitionCount();
     }
 
+#ifdef MTK_IMAGE_ENABLE_PQ_FOR_JPEG
+    int getPostProcFlag() const { return fPostProc; }
+    void setPostProcFlag(int flag) { fPostProc = flag;}
+#endif
+
     // Register a decoder at runtime by passing two function pointers:
     //    - peek() to return true if the span of bytes appears to be your encoded format;
     //    - make() to attempt to create an SkCodec from the given stream.
@@ -889,6 +900,9 @@ private:
     // Allows SkAndroidCodec to call handleFrameIndex (potentially decoding a prior frame and
     // clearing to transparent) without SkCodec calling it, too.
     bool                               fAndroidCodecHandlesFrameIndex;
+#ifdef MTK_IMAGE_ENABLE_PQ_FOR_JPEG
+    int                                fPostProc;
+#endif
 
     bool initializeColorXform(const SkImageInfo& dstInfo, SkEncodedInfo::Alpha, bool srcIsOpaque);
 

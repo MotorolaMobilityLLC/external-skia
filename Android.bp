@@ -4,14 +4,35 @@
 // files it uses) and submit. The autoroller will then create the updated
 // Android.bp. Or ask a Skia engineer for help.
 
+bootstrap_go_package {
+    name: "soon-jpegenhance-skia",
+    pkgPath: "android/soong/jpegenhance-skia",
+    deps: [
+        "blueprint",
+        "blueprint-pathtools",
+        "soong",
+        "soong-android",
+        "soong-cc",
+        "soong-genrule",
+        "soong-android-mediatek"
+    ],
+    srcs: [
+        "mtkjpeg.go",
+    ],
+    pluginFor: ["soong_build"],
+}
+mtk_jpeg_enhance_skia_defaults {
+    name: "mtk_jpeg_enhance_skia_defaults",
+}
 cc_library_static {
     name: "libskia",
-    host_supported: true,
+    host_supported: false,
     cflags: [
         "-U_FORTIFY_SOURCE",
         "-DATRACE_TAG=ATRACE_TAG_VIEW",
         "-DSKIA_DLL",
         "-DSKIA_IMPLEMENTATION=1",
+        "-DSK_PRINT_CODEC_MESSAGES",
         "-D_FORTIFY_SOURCE=1",
         "-Wno-attributes",
         "-Wno-implicit-fallthrough",
@@ -20,7 +41,7 @@ cc_library_static {
         "-Wno-thread-safety-analysis",
         "-Wno-unused-parameter",
         "-Wno-unused-variable",
-        "-fvisibility=hidden",
+        //"-fvisibility=hidden",
     ],
 
     cppflags:[
@@ -78,7 +99,6 @@ cc_library_static {
         "src/codec/SkColorTable.cpp",
         "src/codec/SkEncodedInfo.cpp",
         "src/codec/SkIcoCodec.cpp",
-        "src/codec/SkJpegCodec.cpp",
         "src/codec/SkJpegDecoderMgr.cpp",
         "src/codec/SkJpegUtility.cpp",
         "src/codec/SkMaskSwizzler.cpp",
@@ -960,7 +980,8 @@ cc_library_static {
       },
     },
 
-    defaults: ["skia_deps",
+    defaults: ["mtk_jpeg_enhance_skia_defaults",
+               "skia_deps",
                "skia_pgo",
     ],
 }
@@ -1004,6 +1025,34 @@ cc_defaults {
         "libpng",
         "libz",
     ],
+    arch: {
+        arm: {
+            shared_libs: [
+                "libjpeg-alpha",
+                "libhidlbase",
+                "vendor.mediatek.hardware.mms@1.0",
+                "vendor.mediatek.hardware.mms@1.1",
+                "vendor.mediatek.hardware.mms@1.2",
+                "vendor.mediatek.hardware.mms@1.3",
+                "libion",
+                "libdmabufheap",
+                "libJpegOal",
+            ],
+        },
+        arm64: {
+            shared_libs: [
+                "libjpeg-alpha",
+                "libhidlbase",
+                "vendor.mediatek.hardware.mms@1.0",
+                "vendor.mediatek.hardware.mms@1.1",
+                "vendor.mediatek.hardware.mms@1.2",
+                "vendor.mediatek.hardware.mms@1.3",
+                "libion",
+                "libdmabufheap",
+                "libJpegOal",
+            ],
+        },
+    },
     static_libs: [
         "libarect",
         "libsfntly",
@@ -1073,7 +1122,8 @@ cc_test {
     name: "skia_dm",
 
     defaults: [
-        "skia_tool_deps"
+        "skia_tool_deps",
+        "mtk_jpeg_enhance_skia_defaults",
     ],
 
     local_include_dirs: [
@@ -2115,7 +2165,8 @@ cc_test {
     name: "skia_nanobench",
 
     defaults: [
-        "skia_tool_deps"
+        "skia_tool_deps",
+        "mtk_jpeg_enhance_skia_defaults",
     ],
 
     local_include_dirs: [

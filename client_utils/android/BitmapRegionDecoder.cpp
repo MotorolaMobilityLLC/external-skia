@@ -34,7 +34,8 @@ std::unique_ptr<BitmapRegionDecoder> BitmapRegionDecoder::Make(sk_sp<SkData> dat
 }
 
 BitmapRegionDecoder::BitmapRegionDecoder(std::unique_ptr<SkAndroidCodec> codec)
-    : fCodec(std::move(codec))
+    : fCodec(std::move(codec)),
+      vendorExt(false)
 {}
 
 int BitmapRegionDecoder::width() const {

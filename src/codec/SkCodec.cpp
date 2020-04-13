@@ -169,6 +169,10 @@ SkCodec::SkCodec(SkEncodedInfo&& info, XformFormat srcFormat, std::unique_ptr<Sk
     , fCurrScanline(-1)
     , fStartedIncrementalDecode(false)
     , fAndroidCodecHandlesFrameIndex(false)
+#ifdef MTK_IMAGE_ENABLE_PQ_FOR_JPEG
+    , fPostProc(0)
+#endif
+
 {}
 
 SkCodec::~SkCodec() {}

@@ -16,9 +16,11 @@
 namespace android {
 namespace skia {
 
-class BitmapRegionDecoder final {
+class BitmapRegionDecoder {
 public:
     static std::unique_ptr<BitmapRegionDecoder> Make(sk_sp<SkData> data);
+
+    BitmapRegionDecoder(std::unique_ptr<SkAndroidCodec> codec);
 
     bool decodeRegion(SkBitmap* bitmap, BRDAllocator* allocator,
                       const SkIRect& desiredSubset, int sampleSize,
@@ -39,10 +41,13 @@ public:
     int width() const;
     int height() const;
 
+    bool isVendorExt() { return vendorExt; }
+    void setVendorExt(bool vendor) { vendorExt = vendor; }
+
 private:
-    BitmapRegionDecoder(std::unique_ptr<SkAndroidCodec> codec);
 
     std::unique_ptr<SkAndroidCodec> fCodec;
+    bool vendorExt;
 };
 
 } // namespace skia
