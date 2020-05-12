@@ -18,6 +18,12 @@
 #include "src/codec/SkParseEncodedOrigin.h"
 #include "src/pdf/SkJpegInfo.h"
 
+//unisoc:add for debug jpeg decode
+#define SKIA_DEBUG_PROP "skia.jpeg.prop"
+
+#include <cutils/properties.h>
+#include <iostream>
+
 // stdio is needed for libjpeg-turbo
 #include <stdio.h>
 #include "src/codec/SkJpegUtility.h"
@@ -31,6 +37,8 @@ extern "C" {
     #include "jerror.h"
     #include "jpeglib.h"
 }
+
+static bool SkiaDebugValue = false;
 
 bool SkJpegCodec::IsJpeg(const void* buffer, size_t bytesRead) {
     constexpr uint8_t jpegSig[] = { 0xFF, 0xD8, 0xFF };
@@ -243,6 +251,7 @@ std::unique_ptr<SkCodec> SkJpegCodec::MakeFromStream(std::unique_ptr<SkStream> s
         // Codec has taken ownership of the stream, we do not need to delete it
         SkASSERT(codec);
         stream.release();
+        SkiaDebugValue =  property_get_bool(SKIA_DEBUG_PROP, false);
         return std::unique_ptr<SkCodec>(codec);
     }
     return nullptr;
@@ -480,6 +489,7 @@ int SkJpegCodec::readRows(const SkImageInfo& dstInfo, void* dst, size_t rowBytes
         dstWidth = fSwizzler->swizzleWidth();
     }
 
+    if(SkiaDebugValue) SkDebugf("SkJpegCodec readRows start decode.");
     for (int y = 0; y < count; y++) {
         uint32_t lines = jpeg_read_scanlines(fDecoderMgr->dinfo(), &decodeDst, 1);
         if (0 == lines) {
@@ -498,6 +508,7 @@ int SkJpegCodec::readRows(const SkImageInfo& dstInfo, void* dst, size_t rowBytes
         decodeDst = SkTAddOffset<JSAMPLE>(decodeDst, decodeDstRowBytes);
         swizzleDst = SkTAddOffset<uint32_t>(swizzleDst, swizzleDstRowBytes);
     }
+    if(SkiaDebugValue) SkDebugf("SkJpegCodec readRows end decode.");
 
     return count;
 }
@@ -557,6 +568,7 @@ SkCodec::Result SkJpegCodec::onGetPixels(const SkImageInfo& dstInfo,
         return kInternalError;
     }
 
+    if(SkiaDebugValue) SkDebugf("SkJpegCodec decode onGetPixels, width :%d , height :%d .", dstInfo.width(), dstInfo.height());
     int rows = this->readRows(dstInfo, dst, dstRowBytes, dstInfo.height(), options);
     if (rows < dstInfo.height()) {
         *rowsDecoded = rows;
@@ -724,6 +736,7 @@ SkCodec::Result SkJpegCodec::onStartScanlineDecode(const SkImageInfo& dstInfo,
 }
 
 int SkJpegCodec::onGetScanlines(void* dst, int count, size_t dstRowBytes) {
+    if(SkiaDebugValue) SkDebugf("SkJpegCodec onGetScanlines, count:%d .", count);
     int rows = this->readRows(this->dstInfo(), dst, dstRowBytes, count, this->options());
     if (rows < count) {
         // This allows us to skip calling jpeg_finish_decompress().
@@ -740,6 +753,7 @@ bool SkJpegCodec::onSkipScanlines(int count) {
         return fDecoderMgr->returnFalse("onSkipScanlines");
     }
 
+    if(SkiaDebugValue) SkDebugf("SkJpegCodec onSkipScanlines, count:%d .", count);
     return (uint32_t) count == jpeg_skip_scanlines(fDecoderMgr->dinfo(), count);
 }
 
