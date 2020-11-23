@@ -43,7 +43,6 @@
   using namespace android;
   #define MTK_SKIA_USE_ION
   #define ION_HEAP_MULTIMEDIA_MASK (1 << 10)
-  #define ION_HEAP_MULTIMEDIA_MAP_MVA_MASK (1 << 14)
 #endif
 
 #include <cutils/properties.h>
@@ -746,7 +745,6 @@ bool SkJPEGImageDecoder::onBuildTileIndex(SkStreamRewindable* stream, int *width
 
 extern void* allocateIONBuffer(int ionClientHnd, ion_user_handle_t *ionAllocHnd, int *bufferFD, size_t size);
 extern void freeIONBuffer(int ionClientHnd, ion_user_handle_t ionAllocHnd, void* bufferAddr, int bufferFD, size_t size);
-extern int IONVaToMva(int ionClientHnd, unsigned long va, unsigned int size, unsigned int *mva, int *handleToBeFree);
 
 bool MDPResizer(void* src, int ionClientHnd, int srcFD, int width, int height, SkScaledBitmapSampler::SrcConfig sc, SkBitmap* bm, SkColorType colorType, int tdsp, void* pPPParam, unsigned int ISOSpeed)
 {

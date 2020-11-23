@@ -44,7 +44,6 @@ using namespace android;
 #define MAX_APP1_HEADER_SIZE 8 * 1024
 #define TO_CEIL(x,a) ( ( (unsigned long)(x) + ((a)-1)) & ~((a)-1) )
 #define ION_HEAP_MULTIMEDIA_MASK (1 << 10)
-#define ION_HEAP_MULTIMEDIA_MAP_MVA_MASK (1 << 14)
 
 void* allocateIONBuffer(int ionClientHnd, ion_user_handle_t *ionAllocHnd, int *bufferFD, size_t size)
 {
@@ -84,52 +83,6 @@ void freeIONBuffer(int ionClientHnd, ion_user_handle_t ionAllocHnd, void* buffer
     {
         SkCodecPrintf("freeIONBuffer ion_free failed (%d, %d)\n", ionClientHnd, bufferFD);
     }
-}
-
-int IONVaToMva(int ionClientHnd, unsigned long va, unsigned int size, unsigned int *mva, int *handleToBeFree)
-{
-
-   int ion_user_handle;
-   int ret = 0;
-   struct ion_sys_data sys_data;
-   struct ion_mm_data mm_data;
-   struct ion_custom_data custom_data;
-   ret = ion_alloc(ionClientHnd, size, va, ION_HEAP_MULTIMEDIA_MAP_MVA_MASK, 3, &ion_user_handle);
-   if (ret < 0) {
-        SkCodecPrintf("ion_alloc fail\n");
-        return ret;
-    }
-    mm_data.mm_cmd = ION_MM_CONFIG_BUFFER;
-    mm_data.config_buffer_param.eModuleID = 5;
-    mm_data.config_buffer_param.coherent = 0;
-    mm_data.config_buffer_param.security = 0;
-    mm_data.config_buffer_param.handle = ion_user_handle;
-
-    custom_data.cmd = ION_CMD_MULTIMEDIA;
-    custom_data.arg = (unsigned long)&mm_data;
-    ret = ioctl(ionClientHnd, ION_IOC_CUSTOM, &custom_data);
-    if (ret < 0) {
-        SkCodecPrintf("ion config buffer fail\n");
-        return ret;
-    }
-
-    sys_data.sys_cmd = ION_SYS_GET_PHYS;
-    sys_data.get_phys_param.handle = ion_user_handle;
-    sys_data.get_phys_param.len = size;
-
-    custom_data.cmd = ION_CMD_SYSTEM;
-    custom_data.arg = (unsigned long)&sys_data;
-
-    ret = ioctl(ionClientHnd, ION_IOC_CUSTOM, &custom_data);
-    if (ret < 0) {
-        SkCodecPrintf("ion get phys fail\n");
-        return ret;
-    }
-    *mva = sys_data.get_phys_param.phy_addr;
-    SkCodecPrintf("va 0x%lx, size %d,phy_addr 0x%x,mav 0x%x",va,size,sys_data.get_phys_param.phy_addr,*mva);
-
-    *handleToBeFree = ion_user_handle;
-    return 1;
 }
 
 unsigned int getISOSpeedRatings(void *buffer, unsigned int size)
