@@ -202,6 +202,8 @@ void* GrBufferAllocPool::makeSpace(size_t size,
         size_t usedBytes = back.fBuffer->size() - back.fBytesFree;
         size_t pad = align_up_pad(usedBytes, alignment);
         SkSafeMath safeMath;
+        // expand request size for retain buffer room
+        size += (2 * alignment);
         size_t alignedSize = safeMath.add(pad, size);
         if (!safeMath.ok()) {
             return nullptr;
