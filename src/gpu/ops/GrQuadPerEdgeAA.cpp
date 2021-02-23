@@ -445,7 +445,7 @@ void ConfigureMesh(const GrCaps& caps, GrMesh* mesh, const VertexSpec& spec,
         int maxVertex = (runningQuadCount + quadsInDraw) * numVertsPerQuad;
 
         mesh->setIndexed(std::move(indexBuffer), numIndicesToDraw,
-                         baseIndex, minVertex, maxVertex, GrPrimitiveRestart::kNo);
+                         baseIndex, minVertex, maxVertex - 1, GrPrimitiveRestart::kNo);
         mesh->setVertexData(std::move(vertexBuffer), absVertBufferOffset);
     }
 }
