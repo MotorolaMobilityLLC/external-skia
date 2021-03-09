@@ -14,6 +14,7 @@
 #include "src/sksl/SkSLASTFile.h"
 #include "src/sksl/SkSLASTNode.h"
 #include "src/sksl/SkSLErrorReporter.h"
+#include "src/sksl/SkSLOperators.h"
 #include "src/sksl/ir/SkSLBlock.h"
 #include "src/sksl/ir/SkSLExpression.h"
 #include "src/sksl/ir/SkSLExtension.h"
@@ -104,8 +105,7 @@ private:
  */
 class IRGenerator {
 public:
-    IRGenerator(const Context* context,
-                const ShaderCapsClass* caps);
+    IRGenerator(const Context* context);
 
     struct IRBundle {
         std::vector<std::unique_ptr<ProgramElement>> fElements;
@@ -120,19 +120,14 @@ public:
      * Program, but ownership is *not* transferred. It is up to the caller to keep them alive.
      */
     IRBundle convertProgram(
-            Program::Kind kind,
-            const Program::Settings* settings,
             const ParsedModule& base,
             bool isBuiltinCode,
             const char* text,
             size_t length,
             const std::vector<std::unique_ptr<ExternalFunction>>* externalFunctions);
 
-    // both of these functions return null and report an error if the setting does not exist
-    const Type* typeForSetting(int offset, String name) const;
-    std::unique_ptr<Expression> valueForSetting(int offset, String name) const;
-
-    const Program::Settings* settings() const { return fSettings; }
+    const Program::Settings& settings() const { return fContext.fConfig->fSettings; }
+    ProgramKind programKind() const { return fContext.fConfig->fKind; }
 
     ErrorReporter& errorReporter() const { return fContext.fErrors; }
 
@@ -155,9 +150,20 @@ private:
      */
     std::unique_ptr<ModifiersPool> releaseModifiers();
 
-    void checkModifiers(int offset, const Modifiers& modifiers, int permitted);
-    void checkVarDeclaration(int offset, const Modifiers& modifiers, const Type* baseType,
+    void checkModifiers(int offset,
+                        const Modifiers& modifiers,
+                        int permittedModifierFlags,
+                        int permittedLayoutFlags);
+    void checkVarDeclaration(int offset,
+                             const Modifiers& modifiers,
+                             const Type* baseType,
                              Variable::Storage storage);
+    std::unique_ptr<Variable> convertVar(int offset, const Modifiers& modifiers,
+                                         const Type* baseType, StringFragment name, bool isArray,
+                                         std::unique_ptr<Expression> arraySize,
+                                         Variable::Storage storage);
+    std::unique_ptr<Statement> convertVarDeclaration(std::unique_ptr<Variable> var,
+                                                     std::unique_ptr<Expression> value);
     std::unique_ptr<Statement> convertVarDeclaration(int offset, const Modifiers& modifiers,
                                                      const Type* baseType, StringFragment name,
                                                      bool isArray,
@@ -185,54 +191,22 @@ private:
     int convertArraySize(const Type& type, int offset, const ASTNode& s);
     int convertArraySize(const Type& type, std::unique_ptr<Expression> s);
     bool containsConstantZero(Expression& expr);
-    bool dividesByZero(Token::Kind op, Expression& right);
-    std::unique_ptr<Expression> convertBinaryExpression(std::unique_ptr<Expression> left,
-                                                        Token::Kind op,
-                                                        std::unique_ptr<Expression> right);
+    bool dividesByZero(Operator op, Expression& right);
     std::unique_ptr<Block> convertBlock(const ASTNode& block);
     std::unique_ptr<Statement> convertBreak(const ASTNode& b);
-    std::unique_ptr<Expression> convertArrayConstructor(int offset,
-                                                        const Type& type,
-                                                        ExpressionArray args);
-    std::unique_ptr<Expression> convertScalarConstructor(int offset,
-                                                         const Type& type,
-                                                         ExpressionArray params);
-    std::unique_ptr<Expression> convertCompoundConstructor(int offset,
-                                                           const Type& type,
-                                                           ExpressionArray params);
-    std::unique_ptr<Expression> convertConstructor(int offset,
-                                                   const Type& type,
-                                                   ExpressionArray params);
     std::unique_ptr<Statement> convertContinue(const ASTNode& c);
     std::unique_ptr<Statement> convertDiscard(const ASTNode& d);
-    std::unique_ptr<Statement> convertDo(std::unique_ptr<Statement> stmt,
-                                         std::unique_ptr<Expression> test);
     std::unique_ptr<Statement> convertDo(const ASTNode& d);
-    std::unique_ptr<Statement> convertSwitch(int offset,
-                                             bool isStatic,
-                                             std::unique_ptr<Expression> value,
-                                             ExpressionArray caseValues,
-                                             SkTArray<StatementArray> caseStatements,
-                                             std::shared_ptr<SymbolTable> symbolTable);
     std::unique_ptr<Statement> convertSwitch(const ASTNode& s);
     std::unique_ptr<Expression> convertBinaryExpression(const ASTNode& expression);
     std::unique_ptr<Extension> convertExtension(int offset, StringFragment name);
     std::unique_ptr<Statement> convertExpressionStatement(const ASTNode& s);
     std::unique_ptr<Expression> convertField(std::unique_ptr<Expression> base,
                                              StringFragment field);
-    std::unique_ptr<Statement> convertFor(int offset,
-                                          std::unique_ptr<Statement> initializer,
-                                          std::unique_ptr<Expression> test,
-                                          std::unique_ptr<Expression> next,
-                                          std::unique_ptr<Statement> statement);
     std::unique_ptr<Statement> convertFor(const ASTNode& f);
     std::unique_ptr<Expression> convertIdentifier(int offset, StringFragment identifier);
     std::unique_ptr<Expression> convertIdentifier(const ASTNode& identifier);
     std::unique_ptr<Statement> convertIf(const ASTNode& s);
-    std::unique_ptr<Statement> convertIf(int offset, bool isStatic,
-                                         std::unique_ptr<Expression> test,
-                                         std::unique_ptr<Statement> ifTrue,
-                                         std::unique_ptr<Statement> ifFalse);
     std::unique_ptr<InterfaceBlock> convertInterfaceBlock(const ASTNode& s);
     Modifiers convertModifiers(const Modifiers& m);
     std::unique_ptr<Expression> convertPrefixExpression(const ASTNode& expression);
@@ -244,23 +218,14 @@ private:
     std::unique_ptr<Expression> convertIndexExpression(const ASTNode& expression);
     std::unique_ptr<Expression> convertIndex(std::unique_ptr<Expression> base,
                                              std::unique_ptr<Expression> index);
-    std::unique_ptr<Expression> convertPostfixExpression(std::unique_ptr<Expression> base,
-                                                         Token::Kind op);
     std::unique_ptr<Expression> convertPostfixExpression(const ASTNode& expression);
-    std::unique_ptr<Expression> convertPrefixExpression(Token::Kind op,
-                                                        std::unique_ptr<Expression> base);
     std::unique_ptr<Expression> convertScopeExpression(const ASTNode& expression);
     std::unique_ptr<StructDefinition> convertStructDefinition(const ASTNode& expression);
     std::unique_ptr<Expression> convertTypeField(int offset, const Type& type,
                                                  StringFragment field);
     std::unique_ptr<Expression> convertSwizzle(std::unique_ptr<Expression> base, String fields);
-    std::unique_ptr<Expression> convertTernaryExpression(std::unique_ptr<Expression> test,
-                                                         std::unique_ptr<Expression> ifTrue,
-                                                         std::unique_ptr<Expression> ifFalse);
     std::unique_ptr<Expression> convertTernaryExpression(const ASTNode& expression);
     std::unique_ptr<Statement> convertVarDeclarationStatement(const ASTNode& s);
-    std::unique_ptr<Statement> convertWhile(int offset, std::unique_ptr<Expression> test,
-                                            std::unique_ptr<Statement> statement);
     std::unique_ptr<Statement> convertWhile(const ASTNode& w);
     void convertGlobalVarDeclarations(const ASTNode& decl);
     void convertEnum(const ASTNode& e);
@@ -280,16 +245,17 @@ private:
     // Runtime effects (and the interpreter, which uses the same CPU runtime) require adherence to
     // the strict rules from The OpenGL ES Shading Language Version 1.00. (Including Appendix A).
     bool strictES2Mode() const {
-        return fKind == Program::kRuntimeEffect_Kind || fKind == Program::kGeneric_Kind;
+        return fContext.fConfig->strictES2Mode();
+    }
+
+    const ShaderCapsClass& caps() const {
+        return fContext.fCaps;
     }
 
     Program::Inputs fInputs;
-    const Program::Settings* fSettings = nullptr;
-    const ShaderCapsClass* fCaps = nullptr;
-    Program::Kind fKind;
 
     std::unique_ptr<ASTFile> fFile;
-    std::unordered_map<String, Program::Settings::Value> fCapsMap;
+
     std::shared_ptr<SymbolTable> fSymbolTable = nullptr;
     // additional statements that need to be inserted before the one that convertStatement is
     // currently working on

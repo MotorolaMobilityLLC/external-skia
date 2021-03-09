@@ -58,12 +58,12 @@ private:
     }
     UniformHandle kVar;
 };
-GrGLSLFragmentProcessor* GrArithmeticProcessor::onCreateGLSLInstance() const {
-    return new GrGLSLArithmeticProcessor();
+std::unique_ptr<GrGLSLFragmentProcessor> GrArithmeticProcessor::onMakeProgramImpl() const {
+    return std::make_unique<GrGLSLArithmeticProcessor>();
 }
 void GrArithmeticProcessor::onGetGLSLProcessorKey(const GrShaderCaps& caps,
                                                   GrProcessorKeyBuilder* b) const {
-    b->add32((uint32_t)enforcePMColor);
+    b->addBits(1, (uint32_t)enforcePMColor, "enforcePMColor");
 }
 bool GrArithmeticProcessor::onIsEqual(const GrFragmentProcessor& other) const {
     const GrArithmeticProcessor& that = other.cast<GrArithmeticProcessor>();

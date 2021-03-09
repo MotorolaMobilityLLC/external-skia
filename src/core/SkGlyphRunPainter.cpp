@@ -139,22 +139,16 @@ void SkGlyphRunListPainter::drawForBitmapDevice(
 #if SK_SUPPORT_GPU
 void SkGlyphRunListPainter::processGlyphRun(const SkGlyphRun& glyphRun,
                                             const SkMatrix& drawMatrix,
-                                            SkPoint drawOrigin,
                                             const SkPaint& runPaint,
-                                            const SkSurfaceProps& props,
-                                            bool contextSupportsDistanceFieldText,
                                             const GrSDFTOptions& options,
                                             SkGlyphRunPainterInterface* process) {
     ScopedBuffers _ = this->ensureBuffers(glyphRun);
     fRejects.setSource(glyphRun.source());
     const SkFont& runFont = glyphRun.font();
-    bool useSDFT = options.canDrawAsDistanceFields(
-            runPaint, runFont, drawMatrix, props, contextSupportsDistanceFieldText);
 
-    bool usePaths =
-            useSDFT ? false : SkStrikeSpec::ShouldDrawAsPath(runPaint, runFont, drawMatrix);
+    GrSDFTOptions::DrawingType drawingType = options.drawingType(runFont, runPaint, drawMatrix);
 
-    if (useSDFT) {
+    if (drawingType == GrSDFTOptions::kSDFT) {
         // Process SDFT - This should be the .009% case.
         const auto& [strikeSpec, minScale, maxScale] =
                 SkStrikeSpec::MakeSDFT(runFont, runPaint, fDeviceProps, drawMatrix, options);
@@ -175,7 +169,7 @@ void SkGlyphRunListPainter::processGlyphRun(const SkGlyphRun& glyphRun,
         }
     }
 
-    if (!usePaths && !fRejects.source().empty()) {
+    if (drawingType != GrSDFTOptions::kPath && !fRejects.source().empty()) {
         // Process masks including ARGB - this should be the 99.99% case.
 
         SkStrikeSpec strikeSpec = SkStrikeSpec::MakeMask(
@@ -183,7 +177,7 @@ void SkGlyphRunListPainter::processGlyphRun(const SkGlyphRun& glyphRun,
 
         SkScopedStrikeForGPU strike = strikeSpec.findOrCreateScopedStrike(fStrikeCache);
 
-        fDrawable.startGPUDevice(fRejects.source(), drawOrigin, drawMatrix, strike->roundingSpec());
+        fDrawable.startGPUDevice(fRejects.source(), drawMatrix, strike->roundingSpec());
         strike->prepareForMaskDrawing(&fDrawable, &fRejects);
         fRejects.flipRejectsToSource();
 

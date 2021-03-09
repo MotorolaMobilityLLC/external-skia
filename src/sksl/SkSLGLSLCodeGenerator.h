@@ -55,13 +55,12 @@ public:
                       OutputStream* out)
     : INHERITED(program, errors, out)
     , fLineEnding("\n")
-    , fContext(*context)
-    , fProgramKind(program->fKind) {}
+    , fContext(*context) {}
 
     bool generateCode() override;
 
 protected:
-    using Precedence = Operators::Precedence;
+    using Precedence = Operator::Precedence;
 
     void write(const char* s);
 
@@ -175,13 +174,14 @@ protected:
 
     virtual void writeProgramElement(const ProgramElement& e);
 
+    const ShaderCapsClass& caps() const { return fContext.fCaps; }
+
     const char* fLineEnding;
     const Context& fContext;
     StringStream fExtensions;
     StringStream fGlobals;
     StringStream fExtraFunctions;
     String fFunctionHeader;
-    Program::Kind fProgramKind;
     int fVarCount = 0;
     int fIndentation = 0;
     bool fAtLineStart = false;

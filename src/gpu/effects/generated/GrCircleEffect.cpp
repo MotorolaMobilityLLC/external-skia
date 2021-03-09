@@ -95,12 +95,12 @@ private:
     float prevRadius = 0;
     UniformHandle circleVar;
 };
-GrGLSLFragmentProcessor* GrCircleEffect::onCreateGLSLInstance() const {
-    return new GrGLSLCircleEffect();
+std::unique_ptr<GrGLSLFragmentProcessor> GrCircleEffect::onMakeProgramImpl() const {
+    return std::make_unique<GrGLSLCircleEffect>();
 }
 void GrCircleEffect::onGetGLSLProcessorKey(const GrShaderCaps& caps,
                                            GrProcessorKeyBuilder* b) const {
-    b->add32((uint32_t)edgeType);
+    b->addBits(2, (uint32_t)edgeType, "edgeType");
 }
 bool GrCircleEffect::onIsEqual(const GrFragmentProcessor& other) const {
     const GrCircleEffect& that = other.cast<GrCircleEffect>();

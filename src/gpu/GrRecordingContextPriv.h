@@ -31,7 +31,7 @@ public:
     GrImageContext* asImageContext() { return fContext->asImageContext(); }
     GrRecordingContext* asRecordingContext() { return fContext->asRecordingContext(); }
 
-    // from GrImageContext
+    // from GrRecordingContext
     GrProxyProvider* proxyProvider() { return fContext->proxyProvider(); }
     const GrProxyProvider* proxyProvider() const { return fContext->proxyProvider(); }
 
@@ -102,9 +102,7 @@ public:
         return &fContext->fStats;
     }
 
-    GrSDFTOptions SDFTOptions() const {
-        return {this->options().fMinDistanceFieldFontSize, this->options().fGlyphsAsPathsFontSize};
-    }
+    GrSDFTOptions getSDFTOptions(bool useSDFTForSmallText) const;
 
     /**
      * Create a GrRecordingContext without a resource cache

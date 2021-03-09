@@ -204,6 +204,12 @@ static bool detect_shader_settings(const SkSL::String& text,
                     static auto s_version450CoreCaps = Factory::Version450Core();
                     *caps = s_version450CoreCaps.get();
                 }
+                if (settingsText.consumeSuffix(" NoControlFlowAnalysis")) {
+                    settings->fControlFlowAnalysis = false;
+                }
+                if (settingsText.consumeSuffix(" NoDeadCodeElimination")) {
+                    settings->fDeadCodeElimination = false;
+                }
                 if (settingsText.consumeSuffix(" FlipY")) {
                     settings->fFlipY = true;
                 }
@@ -268,18 +274,18 @@ ResultCode processCommand(std::vector<SkSL::String>& args) {
         return ResultCode::kInputError;
     }
 
-    SkSL::Program::Kind kind;
+    SkSL::ProgramKind kind;
     const SkSL::String& inputPath = args[1];
     if (inputPath.endsWith(".vert")) {
-        kind = SkSL::Program::kVertex_Kind;
+        kind = SkSL::ProgramKind::kVertex;
     } else if (inputPath.endsWith(".frag") || inputPath.endsWith(".sksl")) {
-        kind = SkSL::Program::kFragment_Kind;
+        kind = SkSL::ProgramKind::kFragment;
     } else if (inputPath.endsWith(".geom")) {
-        kind = SkSL::Program::kGeometry_Kind;
+        kind = SkSL::ProgramKind::kGeometry;
     } else if (inputPath.endsWith(".fp")) {
-        kind = SkSL::Program::kFragmentProcessor_Kind;
+        kind = SkSL::ProgramKind::kFragmentProcessor;
     } else if (inputPath.endsWith(".rte")) {
-        kind = SkSL::Program::kRuntimeEffect_Kind;
+        kind = SkSL::ProgramKind::kRuntimeEffect;
     } else {
         printf("input filename must end in '.vert', '.frag', '.geom', '.fp', '.rte', or '.sksl'\n");
         return ResultCode::kInputError;
@@ -401,6 +407,10 @@ ResultCode processCommand(std::vector<SkSL::String>& args) {
                     public:
                         using String = SkSL::String;
 
+                        String getMangledName(const char* name) override {
+                            return String(name) + "_0";
+                        }
+
                         String declareUniform(const SkSL::VarDeclaration* decl) override {
                             fOutput += decl->description();
                             if (decl->var().type().name() == "fragmentProcessor") {
@@ -417,6 +427,10 @@ ResultCode processCommand(std::vector<SkSL::String>& args) {
 
                         void defineStruct(const char* definition) override {
                             fOutput += definition;
+                        }
+
+                        void declareGlobal(const char* declaration) override {
+                            fOutput += declaration;
                         }
 
                         String sampleChild(int index, String coords) override {
@@ -443,8 +457,9 @@ ResultCode processCommand(std::vector<SkSL::String>& args) {
             printf("error writing '%s'\n", outputPath.c_str());
             return ResultCode::kOutputError;
         }
-        SkSL::LoadedModule module = compiler.loadModule(
-                kind, SkSL::Compiler::MakeModulePath(inputPath.c_str()), nullptr);
+        SkSL::LoadedModule module =
+                compiler.loadModule(kind, SkSL::Compiler::MakeModulePath(inputPath.c_str()),
+                                    /*base=*/nullptr, /*dehydrate=*/true);
         SkSL::Dehydrator dehydrator;
         dehydrator.write(*module.fSymbols);
         dehydrator.write(module.fElements);
@@ -464,8 +479,8 @@ ResultCode processCommand(std::vector<SkSL::String>& args) {
             return ResultCode::kOutputError;
         }
     } else {
-        printf("expected output path to end with one of: .glsl, .metal, .spirv, .asm.frag, "
-               ".asm.vert, .asm.geom, .cpp, .h (got '%s')\n", outputPath.c_str());
+        printf("expected output path to end with one of: .glsl, .metal, .spirv, .asm.frag, .skvm, "
+               ".stage, .asm.vert, .asm.geom, .cpp, .h (got '%s')\n", outputPath.c_str());
         return ResultCode::kConfigurationError;
     }
     return ResultCode::kSuccess;

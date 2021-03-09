@@ -144,17 +144,18 @@ private:
     SkPoint focalParamsPrev = SkPoint::Make(SK_FloatNaN, SK_FloatNaN);
     UniformHandle focalParamsVar;
 };
-GrGLSLFragmentProcessor* GrTwoPointConicalGradientLayout::onCreateGLSLInstance() const {
-    return new GrGLSLTwoPointConicalGradientLayout();
+std::unique_ptr<GrGLSLFragmentProcessor> GrTwoPointConicalGradientLayout::onMakeProgramImpl()
+        const {
+    return std::make_unique<GrGLSLTwoPointConicalGradientLayout>();
 }
 void GrTwoPointConicalGradientLayout::onGetGLSLProcessorKey(const GrShaderCaps& caps,
                                                             GrProcessorKeyBuilder* b) const {
-    b->add32((uint32_t)type);
-    b->add32((uint32_t)isRadiusIncreasing);
-    b->add32((uint32_t)isFocalOnCircle);
-    b->add32((uint32_t)isWellBehaved);
-    b->add32((uint32_t)isSwapped);
-    b->add32((uint32_t)isNativelyFocal);
+    b->addBits(2, (uint32_t)type, "type");
+    b->addBits(1, (uint32_t)isRadiusIncreasing, "isRadiusIncreasing");
+    b->addBits(1, (uint32_t)isFocalOnCircle, "isFocalOnCircle");
+    b->addBits(1, (uint32_t)isWellBehaved, "isWellBehaved");
+    b->addBits(1, (uint32_t)isSwapped, "isSwapped");
+    b->addBits(1, (uint32_t)isNativelyFocal, "isNativelyFocal");
 }
 bool GrTwoPointConicalGradientLayout::onIsEqual(const GrFragmentProcessor& other) const {
     const GrTwoPointConicalGradientLayout& that = other.cast<GrTwoPointConicalGradientLayout>();

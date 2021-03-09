@@ -87,14 +87,14 @@ private:
     UniformHandle mVar;
     UniformHandle vVar;
 };
-GrGLSLFragmentProcessor* GrColorMatrixFragmentProcessor::onCreateGLSLInstance() const {
-    return new GrGLSLColorMatrixFragmentProcessor();
+std::unique_ptr<GrGLSLFragmentProcessor> GrColorMatrixFragmentProcessor::onMakeProgramImpl() const {
+    return std::make_unique<GrGLSLColorMatrixFragmentProcessor>();
 }
 void GrColorMatrixFragmentProcessor::onGetGLSLProcessorKey(const GrShaderCaps& caps,
                                                            GrProcessorKeyBuilder* b) const {
-    b->add32((uint32_t)unpremulInput);
-    b->add32((uint32_t)clampRGBOutput);
-    b->add32((uint32_t)premulOutput);
+    b->addBits(1, (uint32_t)unpremulInput, "unpremulInput");
+    b->addBits(1, (uint32_t)clampRGBOutput, "clampRGBOutput");
+    b->addBits(1, (uint32_t)premulOutput, "premulOutput");
 }
 bool GrColorMatrixFragmentProcessor::onIsEqual(const GrFragmentProcessor& other) const {
     const GrColorMatrixFragmentProcessor& that = other.cast<GrColorMatrixFragmentProcessor>();

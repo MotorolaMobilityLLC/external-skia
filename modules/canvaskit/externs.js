@@ -65,7 +65,6 @@ var CanvasKit = {
   getColorComponents: function() {},
   getDecodeCacheLimitBytes: function() {},
   getDecodeCacheUsageBytes: function() {},
-  getDataBytes: function() {},
   multiplyByAlpha: function() {},
   parseColorString: function() {},
   setCurrentContext: function() {},
@@ -83,7 +82,6 @@ var CanvasKit = {
   _MakePicture: function() {},
   _decodeAnimatedImage: function() {},
   _decodeImage: function() {},
-  _drawShapedText: function() {},
   _getShadowLocalBounds: function() {},
 
   // The testing object is meant to expose internal functions
@@ -186,14 +184,6 @@ var CanvasKit = {
   RSXFormBuilder: function() {},
   ColorBuilder: function() {},
   RectBuilder: function() {},
-
-  ShapedText: {
-    prototype: {
-      getBounds: function() {},
-    },
-    // private API (from C++ bindings)
-    _getBounds: function() {},
-  },
 
   AnimatedImage: {
     // public API (from C++ bindings)
@@ -345,7 +335,6 @@ var CanvasKit = {
     getSize: function() {},
     getSkewX: function() {},
     getTypeface: function() {},
-    measureText: function() {},
     setHinting: function() {},
     setLinearMetrics: function() {},
     setScaleX: function() {},
@@ -358,13 +347,11 @@ var CanvasKit = {
       getGlyphBounds: function() {},
       getGlyphIDs: function() {},
       getGlyphWidths: function() {},
-      getWidths: function() {},
     },
 
     // private API (from C++ bindings)
     _getGlyphIDs: function() {},
     _getGlyphWidthBounds: function() {},
-    _getWidths: function() {},
   },
 
   FontMgr: {
@@ -390,6 +377,7 @@ var CanvasKit = {
 
   Image: {
     // public API (from C++ bindings)
+    encodeToBytes: function() {},
     getColorSpace: function() {},
     getImageInfo: function() {},
     makeCopyWithDefaultMipmaps: function() {},
@@ -397,13 +385,10 @@ var CanvasKit = {
     width: function() {},
 
     prototype: {
-      encodeToData: function() {},
       makeShaderCubic: function() {},
       makeShaderOptions: function() {},
     },
     // private API
-    _encodeToData: function() {},
-    _encodeToDataWithFormat: function() {},
     _makeShaderCubic: function() {},
     _makeShaderOptions: function() {},
   },
@@ -528,7 +513,6 @@ var CanvasKit = {
     copy: function() {},
     countPoints: function() {},
     equals: function() {},
-    getBounds: function() {},
     getFillType: function() {},
     isEmpty: function() {},
     isVolatile: function() {},
@@ -556,6 +540,7 @@ var CanvasKit = {
       computeTightBounds: function() {},
       cubicTo: function() {},
       dash: function() {},
+      getBounds: function() {},
       getPoint: function() {},
       lineTo: function() {},
       moveTo: function() {},
@@ -592,6 +577,7 @@ var CanvasKit = {
     _computeTightBounds: function() {},
     _cubicTo: function() {},
     _dash: function() {},
+    _getBounds: function() {},
     _getPoint: function() {},
     _lineTo: function() {},
     _moveTo: function() {},

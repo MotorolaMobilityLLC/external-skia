@@ -87,6 +87,10 @@ public:
                 fArgs.fFragBuilder->definitionAppend(definition);
             }
 
+            void declareGlobal(const char* declaration) override {
+                fArgs.fFragBuilder->definitionAppend(declaration);
+            }
+
             String sampleChild(int index, String coords) override {
                 return String(fSelf->invokeChild(index, fArgs, coords).c_str());
             }
@@ -204,8 +208,8 @@ void GrSkSLFP::addChild(std::unique_ptr<GrFragmentProcessor> child) {
     this->registerChild(std::move(child), fEffect->fSampleUsages[childIndex]);
 }
 
-GrGLSLFragmentProcessor* GrSkSLFP::onCreateGLSLInstance() const {
-    return new GrGLSLSkSLFP();
+std::unique_ptr<GrGLSLFragmentProcessor> GrSkSLFP::onMakeProgramImpl() const {
+    return std::make_unique<GrGLSLSkSLFP>();
 }
 
 void GrSkSLFP::onGetGLSLProcessorKey(const GrShaderCaps& caps, GrProcessorKeyBuilder* b) const {

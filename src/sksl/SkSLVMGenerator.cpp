@@ -424,8 +424,9 @@ SkVMGenerator::SkVMGenerator(const Program& program,
     size_t fpCount = 0;
     for (const ProgramElement* e : fProgram.elements()) {
         if (e->is<GlobalVarDeclaration>()) {
-            const GlobalVarDeclaration& decl = e->as<GlobalVarDeclaration>();
-            const Variable& var = decl.declaration()->as<VarDeclaration>().var();
+            const GlobalVarDeclaration& gvd = e->as<GlobalVarDeclaration>();
+            const VarDeclaration& decl = gvd.declaration()->as<VarDeclaration>();
+            const Variable& var = decl.var();
             SkASSERT(fVariableMap.find(&var) == fVariableMap.end());
 
             // For most variables, fVariableMap stores an index into fSlots, but for fragment
@@ -439,8 +440,10 @@ SkVMGenerator::SkVMGenerator(const Program& program,
             // special types like 'void'. Of those, only fragment processors are legal variables.
             SkASSERT(!var.type().isOpaque());
 
-            size_t nslots = slot_count(var.type());
-            fVariableMap[&var] = fSlots.size();
+            // getSlot() allocates space for the variable's value in fSlots, initializes it to zero,
+            // and populates fVariableMap.
+            size_t slot   = this->getSlot(var),
+                   nslots = slot_count(var.type());
 
             if (int builtin = var.modifiers().fLayout.fBuiltin; builtin >= 0) {
                 // builtin variables are system-defined, with special semantics. The only builtin
@@ -448,10 +451,10 @@ SkVMGenerator::SkVMGenerator(const Program& program,
                 switch (builtin) {
                     case SK_FRAGCOORD_BUILTIN:
                         SkASSERT(nslots == 4);
-                        fSlots.insert(fSlots.end(), {device.x.id,
-                                                     device.y.id,
-                                                     fBuilder->splat(0.0f).id,
-                                                     fBuilder->splat(1.0f).id});
+                        fSlots[slot + 0] = device.x.id;
+                        fSlots[slot + 1] = device.y.id;
+                        fSlots[slot + 2] = fBuilder->splat(0.0f).id;
+                        fSlots[slot + 3] = fBuilder->splat(1.0f).id;
                         break;
                     default:
                         SkDEBUGFAIL("Unsupported builtin");
@@ -459,11 +462,14 @@ SkVMGenerator::SkVMGenerator(const Program& program,
             } else if (is_uniform(var)) {
                 // For uniforms, copy the supplied IDs over
                 SkASSERT(uniformIter + nslots <= uniforms.end());
-                fSlots.insert(fSlots.end(), uniformIter, uniformIter + nslots);
+                std::copy(uniformIter, uniformIter + nslots, fSlots.begin() + slot);
                 uniformIter += nslots;
-            } else {
-                // For other globals, initialize them to zero
-                fSlots.insert(fSlots.end(), nslots, fBuilder->splat(0.0f).id);
+            } else if (decl.value()) {
+                // For other globals, populate with the initializer expression (if there is one)
+                Value val = this->writeExpression(*decl.value());
+                for (size_t i = 0; i < nslots; ++i) {
+                    fSlots[slot + i] = val[i];
+                }
             }
         }
     }
@@ -517,8 +523,6 @@ size_t SkVMGenerator::getSlot(const Variable& v) {
         return entry->second;
     }
 
-    SkASSERT(!is_uniform(v));  // Should have been added at construction time
-
     size_t slot   = fSlots.size(),
            nslots = slot_count(v.type());
     fSlots.resize(slot + nslots, fBuilder->splat(0.0f).id);
@@ -529,8 +533,8 @@ size_t SkVMGenerator::getSlot(const Variable& v) {
 Value SkVMGenerator::writeBinaryExpression(const BinaryExpression& b) {
     const Expression& left = *b.left();
     const Expression& right = *b.right();
-    Token::Kind op = b.getOperator();
-    if (op == Token::Kind::TK_EQ) {
+    Operator op = b.getOperator();
+    if (op.kind() == Token::Kind::TK_EQ) {
         return this->writeStore(left, this->writeExpression(right));
     }
 
@@ -538,14 +542,14 @@ Value SkVMGenerator::writeBinaryExpression(const BinaryExpression& b) {
     const Type& rType = right.type();
     bool lVecOrMtx = (lType.isVector() || lType.isMatrix());
     bool rVecOrMtx = (rType.isVector() || rType.isMatrix());
-    bool isAssignment = Operators::IsAssignment(op);
+    bool isAssignment = op.isAssignment();
     if (isAssignment) {
-        op = Operators::RemoveAssignment(op);
+        op = op.removeAssignment();
     }
     Type::NumberKind nk = base_number_kind(lType);
 
     // A few ops require special treatment:
-    switch (op) {
+    switch (op.kind()) {
         case Token::Kind::TK_LOGICALAND: {
             SkASSERT(!isAssignment);
             SkASSERT(nk == Type::NumberKind::kBoolean);
@@ -576,7 +580,7 @@ Value SkVMGenerator::writeBinaryExpression(const BinaryExpression& b) {
           rVal = this->writeExpression(right);
 
     // Special case for M*V, V*M, M*M (but not V*V!)
-    if (op == Token::Kind::TK_STAR
+    if (op.kind() == Token::Kind::TK_STAR
         && lVecOrMtx && rVecOrMtx && !(lType.isVector() && rType.isVector())) {
         int rCols = rType.columns(),
             rRows = rType.rows(),
@@ -624,7 +628,7 @@ Value SkVMGenerator::writeBinaryExpression(const BinaryExpression& b) {
         return skvm::F32{};
     };
 
-    switch (op) {
+    switch (op.kind()) {
         case Token::Kind::TK_EQEQ: {
             SkASSERT(!isAssignment);
             Value cmp = binary([](skvm::F32 x, skvm::F32 y) { return x == y; },
@@ -1311,10 +1315,10 @@ Value SkVMGenerator::writeExternalFunctionCall(const ExternalFunctionCall& c) {
 Value SkVMGenerator::writePrefixExpression(const PrefixExpression& p) {
     Value val = this->writeExpression(*p.operand());
 
-    switch (p.getOperator()) {
+    switch (p.getOperator().kind()) {
         case Token::Kind::TK_PLUSPLUS:
         case Token::Kind::TK_MINUSMINUS: {
-            bool incr = p.getOperator() == Token::Kind::TK_PLUSPLUS;
+            bool incr = p.getOperator().kind() == Token::Kind::TK_PLUSPLUS;
 
             switch (base_number_kind(p.type())) {
                 case Type::NumberKind::kFloat:
@@ -1350,13 +1354,13 @@ Value SkVMGenerator::writePrefixExpression(const PrefixExpression& p) {
 }
 
 Value SkVMGenerator::writePostfixExpression(const PostfixExpression& p) {
-    switch (p.getOperator()) {
+    switch (p.getOperator().kind()) {
         case Token::Kind::TK_PLUSPLUS:
         case Token::Kind::TK_MINUSMINUS: {
             Value old = this->writeExpression(*p.operand()),
                   val = old;
             SkASSERT(val.slots() == 1);
-            bool incr = p.getOperator() == Token::Kind::TK_PLUSPLUS;
+            bool incr = p.getOperator().kind() == Token::Kind::TK_PLUSPLUS;
 
             switch (base_number_kind(p.type())) {
                 case Type::NumberKind::kFloat:
@@ -1536,7 +1540,9 @@ void SkVMGenerator::writeContinueStatement() {
 void SkVMGenerator::writeForStatement(const ForStatement& f) {
     // We require that all loops be ES2-compliant (unrollable), and actually unroll them here
     Analysis::UnrollableLoopInfo loop;
-    SkAssertResult(Analysis::ForLoopIsValidForES2(f, &loop, /*errors=*/nullptr));
+    SkAssertResult(Analysis::ForLoopIsValidForES2(f.fOffset, f.initializer().get(), f.test().get(),
+                                                  f.next().get(), f.statement().get(), &loop,
+                                                  /*errors=*/nullptr));
     SkASSERT(slot_count(loop.fIndex->type()) == 1);
 
     size_t indexSlot = this->getSlot(*loop.fIndex);

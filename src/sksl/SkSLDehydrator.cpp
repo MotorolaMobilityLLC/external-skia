@@ -89,13 +89,11 @@ void Dehydrator::write(Layout l) {
         this->writeS8(l.fSet);
         this->writeS16(l.fBuiltin);
         this->writeS8(l.fInputAttachmentIndex);
-        this->writeS8((int) l.fFormat);
         this->writeS8(l.fPrimitive);
         this->writeS8(l.fMaxVertices);
         this->writeS8(l.fInvocations);
         this->write(l.fMarker);
         this->write(l.fWhen);
-        this->writeS8(l.fKey);
         this->writeS8((int) l.fCType);
     }
 }
@@ -262,9 +260,8 @@ void Dehydrator::write(const Expression* e) {
                 const BinaryExpression& b = e->as<BinaryExpression>();
                 this->writeCommand(Rehydrator::kBinary_Command);
                 this->write(b.left().get());
-                this->writeU8((int) b.getOperator());
+                this->writeU8((int) b.getOperator().kind());
                 this->write(b.right().get());
-                this->write(b.type());
                 break;
             }
             case Expression::Kind::kBoolLiteral: {
@@ -273,6 +270,9 @@ void Dehydrator::write(const Expression* e) {
                 this->writeU8(b.value());
                 break;
             }
+            case Expression::Kind::kCodeString:
+                SkDEBUGFAIL("shouldn't be able to receive kCodeString here");
+                break;
             case Expression::Kind::kConstructor: {
                 const Constructor& c = e->as<Constructor>();
                 this->writeCommand(Rehydrator::kConstructor_Command);
@@ -332,14 +332,14 @@ void Dehydrator::write(const Expression* e) {
             case Expression::Kind::kPostfix: {
                 const PostfixExpression& p = e->as<PostfixExpression>();
                 this->writeCommand(Rehydrator::kPostfix_Command);
-                this->writeU8((int) p.getOperator());
+                this->writeU8((int) p.getOperator().kind());
                 this->write(p.operand().get());
                 break;
             }
             case Expression::Kind::kPrefix: {
                 const PrefixExpression& p = e->as<PrefixExpression>();
                 this->writeCommand(Rehydrator::kPrefix_Command);
-                this->writeU8((int) p.getOperator());
+                this->writeU8((int) p.getOperator().kind());
                 this->write(p.operand().get());
                 break;
             }
@@ -347,7 +347,6 @@ void Dehydrator::write(const Expression* e) {
                 const Setting& s = e->as<Setting>();
                 this->writeCommand(Rehydrator::kSetting_Command);
                 this->write(s.name());
-                this->write(s.type());
                 break;
             }
             case Expression::Kind::kSwizzle: {

@@ -282,7 +282,7 @@ public:
     }
 
     const std::vector<Field>& fields() const {
-        SkASSERT(this->isStruct() || fTypeKind == TypeKind::kOther);
+        SkASSERT(this->isStruct());
         return fFields;
     }
 
@@ -358,11 +358,20 @@ public:
         return fHighPrecision;
     }
 
+    bool isOrContainsArray() const;
+
     /**
      * Returns the corresponding vector or matrix type with the specified number of columns and
      * rows.
      */
     const Type& toCompound(const Context& context, int columns, int rows) const;
+
+    /**
+     * Coerces the passed-in expression to this type. If the types are incompatible, reports an
+     * error and returns null.
+     */
+    std::unique_ptr<Expression> coerceExpression(std::unique_ptr<Expression> expr,
+                                                 const Context& context) const;
 
 private:
     friend class BuiltinTypes;
@@ -374,13 +383,6 @@ private:
             : INHERITED(-1, kSymbolKind, name)
             , fTypeKind(TypeKind::kOther)
             , fNumberKind(NumberKind::kNonnumeric) {}
-
-    // Constructor for MakeOtherStruct.
-    Type(const char* name, std::vector<Field> fields)
-            : INHERITED(-1, kSymbolKind, name)
-            , fTypeKind(TypeKind::kOther)
-            , fNumberKind(NumberKind::kNonnumeric)
-            , fFields(std::move(fields)) {}
 
     // Constructor for MakeEnumType and MakeSeparateSamplerType.
     Type(String name, TypeKind kind)

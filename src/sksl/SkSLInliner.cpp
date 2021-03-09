@@ -291,9 +291,8 @@ void Inliner::ensureScopedBlocks(Statement* inlinedBody, Statement* parentStmt) 
     }
 }
 
-void Inliner::reset(ModifiersPool* modifiers, const Program::Settings* settings) {
+void Inliner::reset(ModifiersPool* modifiers) {
     fModifiers = modifiers;
-    fSettings = settings;
     fMangler.reset();
     fInlinedStatementCounter = 0;
 }
@@ -320,12 +319,10 @@ std::unique_ptr<Expression> Inliner::inlineExpression(int offset,
     switch (expression.kind()) {
         case Expression::Kind::kBinary: {
             const BinaryExpression& binaryExpr = expression.as<BinaryExpression>();
-            return std::make_unique<BinaryExpression>(
-                    offset,
-                    expr(binaryExpr.left()),
-                    binaryExpr.getOperator(),
-                    expr(binaryExpr.right()),
-                    binaryExpr.type().clone(symbolTableForExpression));
+            return BinaryExpression::Make(*fContext,
+                                          expr(binaryExpr.left()),
+                                          binaryExpr.getOperator(),
+                                          expr(binaryExpr.right()));
         }
         case Expression::Kind::kBoolLiteral:
         case Expression::Kind::kIntLiteral:
@@ -333,9 +330,11 @@ std::unique_ptr<Expression> Inliner::inlineExpression(int offset,
             return expression.clone();
         case Expression::Kind::kConstructor: {
             const Constructor& constructor = expression.as<Constructor>();
-            return std::make_unique<Constructor>(offset,
-                                                 constructor.type().clone(symbolTableForExpression),
-                                                 argList(constructor.arguments()));
+            auto inlinedCtor = Constructor::Convert(
+                    *fContext, offset, *constructor.type().clone(symbolTableForExpression),
+                    argList(constructor.arguments()));
+            SkASSERT(inlinedCtor);
+            return inlinedCtor;
         }
         case Expression::Kind::kExternalFunctionCall: {
             const ExternalFunctionCall& externalCall = expression.as<ExternalFunctionCall>();
@@ -364,22 +363,22 @@ std::unique_ptr<Expression> Inliner::inlineExpression(int offset,
         }
         case Expression::Kind::kPrefix: {
             const PrefixExpression& p = expression.as<PrefixExpression>();
-            return std::make_unique<PrefixExpression>(p.getOperator(), expr(p.operand()));
+            return PrefixExpression::Make(*fContext, p.getOperator(), expr(p.operand()));
         }
         case Expression::Kind::kPostfix: {
             const PostfixExpression& p = expression.as<PostfixExpression>();
-            return std::make_unique<PostfixExpression>(expr(p.operand()), p.getOperator());
+            return PostfixExpression::Make(*fContext, expr(p.operand()), p.getOperator());
         }
         case Expression::Kind::kSetting:
             return expression.clone();
         case Expression::Kind::kSwizzle: {
             const Swizzle& s = expression.as<Swizzle>();
-            return std::make_unique<Swizzle>(*fContext, expr(s.base()), s.components());
+            return Swizzle::Make(*fContext, expr(s.base()), s.components());
         }
         case Expression::Kind::kTernary: {
             const TernaryExpression& t = expression.as<TernaryExpression>();
-            return std::make_unique<TernaryExpression>(offset, expr(t.test()),
-                                                       expr(t.ifTrue()), expr(t.ifFalse()));
+            return TernaryExpression::Make(*fContext, expr(t.test()),
+                                           expr(t.ifTrue()), expr(t.ifFalse()));
         }
         case Expression::Kind::kTypeReference:
             return expression.clone();
@@ -451,29 +450,30 @@ std::unique_ptr<Statement> Inliner::inlineStatement(int offset,
 
         case Statement::Kind::kDo: {
             const DoStatement& d = statement.as<DoStatement>();
-            return std::make_unique<DoStatement>(offset, stmt(d.statement()), expr(d.test()));
+            return DoStatement::Make(*fContext, stmt(d.statement()), expr(d.test()));
         }
         case Statement::Kind::kExpression: {
             const ExpressionStatement& e = statement.as<ExpressionStatement>();
-            return std::make_unique<ExpressionStatement>(expr(e.expression()));
+            return ExpressionStatement::Make(*fContext, expr(e.expression()));
         }
         case Statement::Kind::kFor: {
             const ForStatement& f = statement.as<ForStatement>();
             // need to ensure initializer is evaluated first so that we've already remapped its
             // declarations by the time we evaluate test & next
             std::unique_ptr<Statement> initializer = stmt(f.initializer());
-            return std::make_unique<ForStatement>(offset, std::move(initializer), expr(f.test()),
-                                                  expr(f.next()), stmt(f.statement()),
-                                                  SymbolTable::WrapIfBuiltin(f.symbols()));
+            return ForStatement::Make(*fContext, offset, std::move(initializer), expr(f.test()),
+                                      expr(f.next()), stmt(f.statement()),
+                                      SymbolTable::WrapIfBuiltin(f.symbols()));
         }
         case Statement::Kind::kIf: {
             const IfStatement& i = statement.as<IfStatement>();
-            return std::make_unique<IfStatement>(offset, i.isStatic(), expr(i.test()),
-                                                 stmt(i.ifTrue()), stmt(i.ifFalse()));
+            return IfStatement::Make(*fContext, offset, i.isStatic(), expr(i.test()),
+                                     stmt(i.ifTrue()), stmt(i.ifFalse()));
         }
         case Statement::Kind::kInlineMarker:
         case Statement::Kind::kNop:
             return statement.clone();
+
         case Statement::Kind::kReturn: {
             const ReturnStatement& r = statement.as<ReturnStatement>();
             if (!r.expression()) {
@@ -493,20 +493,20 @@ std::unique_ptr<Statement> Inliner::inlineStatement(int offset,
             // inside an Block's scope, we don't need to store the result in a variable at all. Just
             // replace the function-call expression with the function's return expression.
             SkASSERT(resultExpr);
-            SkASSERT(*resultExpr);
             if (returnComplexity <= ReturnComplexity::kSingleSafeReturn) {
                 *resultExpr = expr(r.expression());
                 return std::make_unique<Nop>();
             }
 
             // For more complex functions, assign their result into a variable.
-            auto assignment =
-                    std::make_unique<ExpressionStatement>(std::make_unique<BinaryExpression>(
-                            offset,
-                            clone_with_ref_kind(**resultExpr, VariableReference::RefKind::kWrite),
+            SkASSERT(*resultExpr);
+            auto assignment = ExpressionStatement::Make(
+                    *fContext,
+                    BinaryExpression::Make(
+                            *fContext,
+                            clone_with_ref_kind(**resultExpr, VariableRefKind::kWrite),
                             Token::Kind::TK_EQ,
-                            expr(r.expression()),
-                            (*resultExpr)->type().clone(symbolTableForStatement)));
+                            expr(r.expression())));
 
             // Early returns are wrapped in a for loop; we need to synthesize a continue statement
             // to "leave" the function.
@@ -520,8 +520,7 @@ std::unique_ptr<Statement> Inliner::inlineStatement(int offset,
             }
             // Functions without early returns aren't wrapped in a for loop and don't need to worry
             // about breaking out of the control flow.
-            return std::move(assignment);
-
+            return assignment;
         }
         case Statement::Kind::kSwitch: {
             const SwitchStatement& ss = statement.as<SwitchStatement>();
@@ -531,9 +530,8 @@ std::unique_ptr<Statement> Inliner::inlineStatement(int offset,
                 cases.push_back(std::make_unique<SwitchCase>(offset, expr(sc->value()),
                                                              stmts(sc->statements())));
             }
-            return std::make_unique<SwitchStatement>(offset, ss.isStatic(), expr(ss.value()),
-                                                     std::move(cases),
-                                                     SymbolTable::WrapIfBuiltin(ss.symbols()));
+            return SwitchStatement::Make(*fContext, offset, ss.isStatic(), expr(ss.value()),
+                                        std::move(cases), SymbolTable::WrapIfBuiltin(ss.symbols()));
         }
         case Statement::Kind::kVarDeclaration: {
             const VarDeclaration& decl = statement.as<VarDeclaration>();
@@ -622,7 +620,6 @@ Inliner::InlinedCall Inliner::inlineCall(FunctionCall* call,
     // order guarantees. Since we can't use gotos (which are normally used to replace return
     // statements), we wrap the whole function in a loop and use break statements to jump to the
     // end.
-    SkASSERT(fSettings);
     SkASSERT(fContext);
     SkASSERT(call);
     SkASSERT(this->isSafeToInline(call->function().definition()));
@@ -648,9 +645,12 @@ Inliner::InlinedCall Inliner::inlineCall(FunctionCall* call,
 
     inlinedBody.children().push_back(std::make_unique<InlineMarker>(&call->function()));
 
-    // Create a variable to hold the result in the extra statements (excepting void).
     std::unique_ptr<Expression> resultExpr;
-    if (function.declaration().returnType() != *fContext->fTypes.fVoid) {
+    if (returnComplexity > ReturnComplexity::kSingleSafeReturn &&
+        function.declaration().returnType() != *fContext->fTypes.fVoid) {
+        // Create a variable to hold the result in the extra statements. We don't need to do this
+        // for void-return functions, or in cases that are simple enough that we can just replace
+        // the function-call node with the result expression.
         std::unique_ptr<Expression> noInitialValue;
         InlineVariable var = this->makeInlineVariable(function.declaration().name(),
                                                       &function.declaration().returnType(),
@@ -658,7 +658,7 @@ Inliner::InlinedCall Inliner::inlineCall(FunctionCall* call,
                                                       caller->isBuiltin(), &noInitialValue);
         inlinedBody.children().push_back(std::move(var.fVarDecl));
         resultExpr = std::make_unique<VariableReference>(/*offset=*/-1, var.fVarSymbol);
-   }
+    }
 
     // Create variables in the extra statements to hold the arguments, and assign the arguments to
     // them.
@@ -707,15 +707,15 @@ Inliner::InlinedCall Inliner::inlineCall(FunctionCall* call,
                                                           &initialValue);
 
         // _1_loop < 1;
-        std::unique_ptr<Expression> test = std::make_unique<BinaryExpression>(
-                /*offset=*/-1,
+        std::unique_ptr<Expression> test = BinaryExpression::Make(
+                *fContext,
                 std::make_unique<VariableReference>(/*offset=*/-1, loopVar.fVarSymbol),
                 Token::Kind::TK_LT,
-                std::make_unique<IntLiteral>(/*offset=*/-1, /*value=*/1, intType),
-                fContext->fTypes.fBool.get());
+                std::make_unique<IntLiteral>(/*offset=*/-1, /*value=*/1, intType));
 
         // _1_loop++
-        std::unique_ptr<Expression> increment = std::make_unique<PostfixExpression>(
+        std::unique_ptr<Expression> increment = PostfixExpression::Make(
+                *fContext,
                 std::make_unique<VariableReference>(/*offset=*/-1, loopVar.fVarSymbol,
                                                     VariableReference::RefKind::kReadWrite),
                 Token::Kind::TK_PLUSPLUS);
@@ -726,12 +726,12 @@ Inliner::InlinedCall Inliner::inlineCall(FunctionCall* call,
         inlineStatements = &innerBlock->children();
 
         // for (int _1_loop = 0; _1_loop < 1; _1_loop++) {...}
-        inlinedBody.children().push_back(std::make_unique<ForStatement>(/*offset=*/-1,
-                                                                        std::move(loopVar.fVarDecl),
-                                                                        std::move(test),
-                                                                        std::move(increment),
-                                                                        std::move(innerBlock),
-                                                                        symbolTable));
+        inlinedBody.children().push_back(ForStatement::Make(*fContext, /*offset=*/-1,
+                                                            std::move(loopVar.fVarDecl),
+                                                            std::move(test),
+                                                            std::move(increment),
+                                                            std::move(innerBlock),
+                                                            symbolTable));
     } else {
         // No early returns, so we can just dump the code into our existing scopeless block.
         inlineStatements = &inlinedBody.children();
@@ -748,34 +748,40 @@ Inliner::InlinedCall Inliner::inlineCall(FunctionCall* call,
     for (int i : argsToCopyBack) {
         const Variable* p = function.declaration().parameters()[i];
         SkASSERT(varMap.find(p) != varMap.end());
-        inlineStatements->push_back(
-                std::make_unique<ExpressionStatement>(std::make_unique<BinaryExpression>(
-                        offset,
-                        clone_with_ref_kind(*arguments[i], VariableReference::RefKind::kWrite),
-                        Token::Kind::TK_EQ,
-                        std::move(varMap[p]),
-                        &arguments[i]->type())));
+        inlineStatements->push_back(ExpressionStatement::Make(
+                *fContext,
+                BinaryExpression::Make(*fContext,
+                                       clone_with_ref_kind(*arguments[i], VariableRefKind::kWrite),
+                                       Token::Kind::TK_EQ,
+                                       std::move(varMap[p]))));
     }
 
-    if (resultExpr != nullptr) {
-        // Return our result variable as our replacement expression.
+    if (resultExpr) {
+        // Return our result expression as-is.
         inlinedCall.fReplacementExpr = std::move(resultExpr);
-    } else {
+    } else if (function.declaration().returnType() == *fContext->fTypes.fVoid) {
         // It's a void function, so it doesn't actually result in anything, but we have to return
         // something non-null as a standin.
         inlinedCall.fReplacementExpr = std::make_unique<BoolLiteral>(*fContext,
                                                                      offset,
                                                                      /*value=*/false);
+    } else {
+        // It's a non-void function, but it never created a result expression--that is, it never
+        // returned anything on any path! This should have been detected in the function finalizer.
+        // Still, discard our output and generate an error.
+        SkDEBUGFAIL("inliner found non-void function that fails to return a value on any path");
+        fContext->fErrors.error(function.fOffset, "inliner found non-void function '" +
+                                                  function.declaration().name() +
+                                                  "' that fails to return a value on any path");
+        inlinedCall = {};
     }
 
     return inlinedCall;
 }
 
 bool Inliner::isSafeToInline(const FunctionDefinition* functionDef) {
-    SkASSERT(fSettings);
-
     // A threshold of zero indicates that the inliner is completely disabled, so we can just return.
-    if (fSettings->fInlineThreshold <= 0) {
+    if (this->settings().fInlineThreshold <= 0) {
         return false;
     }
 
@@ -1004,9 +1010,9 @@ public:
                 // It is illegal for side-effects from x() or y() to occur. The simplest way to
                 // enforce that rule is to avoid inlining the right side entirely. However, it is
                 // safe for other types of binary expression to inline both sides.
-                Token::Kind op = binaryExpr.getOperator();
-                bool shortCircuitable = (op == Token::Kind::TK_LOGICALAND ||
-                                         op == Token::Kind::TK_LOGICALOR);
+                Operator op = binaryExpr.getOperator();
+                bool shortCircuitable = (op.kind() == Token::Kind::TK_LOGICALAND ||
+                                         op.kind() == Token::Kind::TK_LOGICALOR);
                 if (!shortCircuitable) {
                     this->visitExpression(&binaryExpr.right());
                 }
@@ -1098,7 +1104,7 @@ int Inliner::getFunctionSize(const FunctionDeclaration& funcDecl, FunctionSizeCa
     auto [iter, wasInserted] = cache->insert({&funcDecl, 0});
     if (wasInserted) {
         iter->second = Analysis::NodeCountUpToLimit(*funcDecl.definition(),
-                                                    fSettings->fInlineThreshold);
+                                                    this->settings().fInlineThreshold);
     }
     return iter->second;
 }
@@ -1130,7 +1136,7 @@ void Inliner::buildCandidateList(const std::vector<std::unique_ptr<ProgramElemen
 
     // If the inline threshold is unlimited, or if we have no candidates left, our candidate list is
     // complete.
-    if (fSettings->fInlineThreshold == INT_MAX || candidates.empty()) {
+    if (this->settings().fInlineThreshold == INT_MAX || candidates.empty()) {
         return;
     }
 
@@ -1144,34 +1150,32 @@ void Inliner::buildCandidateList(const std::vector<std::unique_ptr<ProgramElemen
         candidateTotalCost[&fnDecl] += this->getFunctionSize(fnDecl, &functionSizeCache);
     }
 
-    candidates.erase(
-            std::remove_if(candidates.begin(),
-                           candidates.end(),
-                           [&](const InlineCandidate& candidate) {
-                               const FunctionDeclaration& fnDecl = candidate_func(candidate);
-                               if (fnDecl.modifiers().fFlags & Modifiers::kInline_Flag) {
-                                   // Functions marked `inline` ignore size limitations.
-                                   return false;
-                               }
-                               if (usage->get(fnDecl) == 1) {
-                                   // If a function is only used once, it's cost-free to inline.
-                                   return false;
-                               }
-                               if (candidateTotalCost[&fnDecl] <= fSettings->fInlineThreshold) {
-                                   // We won't exceed the inline threshold by inlining this.
-                                   return false;
-                               }
-                               // Inlining this function will add too many IRNodes.
-                               return true;
-                           }),
-            candidates.end());
+    candidates.erase(std::remove_if(candidates.begin(), candidates.end(),
+                        [&](const InlineCandidate& candidate) {
+                            const FunctionDeclaration& fnDecl = candidate_func(candidate);
+                            if (fnDecl.modifiers().fFlags & Modifiers::kInline_Flag) {
+                                // Functions marked `inline` ignore size limitations.
+                                return false;
+                            }
+                            if (usage->get(fnDecl) == 1) {
+                                // If a function is only used once, it's cost-free to inline.
+                                return false;
+                            }
+                            if (candidateTotalCost[&fnDecl] <= this->settings().fInlineThreshold) {
+                                // We won't exceed the inline threshold by inlining this.
+                                return false;
+                            }
+                            // Inlining this function will add too many IRNodes.
+                            return true;
+                        }),
+         candidates.end());
 }
 
 bool Inliner::analyze(const std::vector<std::unique_ptr<ProgramElement>>& elements,
                       std::shared_ptr<SymbolTable> symbols,
                       ProgramUsage* usage) {
     // A threshold of zero indicates that the inliner is completely disabled, so we can just return.
-    if (fSettings->fInlineThreshold <= 0) {
+    if (this->settings().fInlineThreshold <= 0) {
         return false;
     }
 
@@ -1199,24 +1203,28 @@ bool Inliner::analyze(const std::vector<std::unique_ptr<ProgramElement>>& elemen
         // Convert the function call to its inlined equivalent.
         InlinedCall inlinedCall = this->inlineCall(&funcCall, candidate.fSymbols,
                                                    &candidate.fEnclosingFunction->declaration());
-        if (inlinedCall.fInlinedBody) {
-            // Ensure that the inlined body has a scope if it needs one.
-            this->ensureScopedBlocks(inlinedCall.fInlinedBody.get(), candidate.fParentStmt->get());
 
-            // Add references within the inlined body
-            usage->add(inlinedCall.fInlinedBody.get());
-
-            // Move the enclosing statement to the end of the unscoped Block containing the inlined
-            // function, then replace the enclosing statement with that Block.
-            // Before:
-            //     fInlinedBody = Block{ stmt1, stmt2, stmt3 }
-            //     fEnclosingStmt = stmt4
-            // After:
-            //     fInlinedBody = null
-            //     fEnclosingStmt = Block{ stmt1, stmt2, stmt3, stmt4 }
-            inlinedCall.fInlinedBody->children().push_back(std::move(*candidate.fEnclosingStmt));
-            *candidate.fEnclosingStmt = std::move(inlinedCall.fInlinedBody);
+        // Stop if an error was detected during the inlining process.
+        if (!inlinedCall.fInlinedBody && !inlinedCall.fReplacementExpr) {
+            break;
         }
+
+        // Ensure that the inlined body has a scope if it needs one.
+        this->ensureScopedBlocks(inlinedCall.fInlinedBody.get(), candidate.fParentStmt->get());
+
+        // Add references within the inlined body
+        usage->add(inlinedCall.fInlinedBody.get());
+
+        // Move the enclosing statement to the end of the unscoped Block containing the inlined
+        // function, then replace the enclosing statement with that Block.
+        // Before:
+        //     fInlinedBody = Block{ stmt1, stmt2, stmt3 }
+        //     fEnclosingStmt = stmt4
+        // After:
+        //     fInlinedBody = null
+        //     fEnclosingStmt = Block{ stmt1, stmt2, stmt3, stmt4 }
+        inlinedCall.fInlinedBody->children().push_back(std::move(*candidate.fEnclosingStmt));
+        *candidate.fEnclosingStmt = std::move(inlinedCall.fInlinedBody);
 
         // Replace the candidate function call with our replacement expression.
         usage->replace(candidate.fCandidateExpr->get(), inlinedCall.fReplacementExpr.get());

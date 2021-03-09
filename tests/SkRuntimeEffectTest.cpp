@@ -96,14 +96,6 @@ DEF_TEST(SkRuntimeEffectInvalid_SkCapsDisallowed, r) {
                            "unknown identifier 'sk_Caps'");
 }
 
-DEF_TEST(SkRuntimeEffectInvalid_LateErrors, r) {
-    // Errors that aren't caught until later in the compilation process (during optimize())
-    test_invalid_effect(r, "half4 main() { return half4(1); return half4(0); }", "unreachable");
-    test_invalid_effect(r, "half4 badFunc() {}"
-                           "half4 main() { return badFunc(); }",
-                           "without returning");
-}
-
 DEF_TEST(SkRuntimeEffectInvalidColorFilters, r) {
     auto test = [r](const char* sksl) {
         auto [effect, errorText] = SkRuntimeEffect::Make(SkString(sksl));
@@ -441,4 +433,24 @@ DEF_TEST(SkRuntimeStructNameReuse, r) {
 
 DEF_GPUTEST_FOR_RENDERING_CONTEXTS(SkRuntimeStructNameReuse_GPU, r, ctxInfo) {
     test_RuntimeEffectStructNameReuse(r, ctxInfo.directContext());
+}
+
+DEF_TEST(SkRuntimeColorFilterFlags, r) {
+    {   // Here's a non-trivial filter that doesn't change alpha.
+        auto [effect, err] = SkRuntimeEffect::Make(SkString{
+                "uniform shader input; half4 main() { return sample(input) + half4(1,1,1,0); }"});
+        REPORTER_ASSERT(r, effect && err.isEmpty());
+        sk_sp<SkColorFilter> input = nullptr,
+                            filter = effect->makeColorFilter(SkData::MakeEmpty(), &input, 1);
+        REPORTER_ASSERT(r, filter && filter->isAlphaUnchanged());
+    }
+
+    {  // Here's one that definitely changes alpha.
+        auto [effect, err] = SkRuntimeEffect::Make(SkString{
+                "uniform shader input; half4 main() { return sample(input) + half4(0,0,0,4); }"});
+        REPORTER_ASSERT(r, effect && err.isEmpty());
+        sk_sp<SkColorFilter> input = nullptr,
+                            filter = effect->makeColorFilter(SkData::MakeEmpty(), &input, 1);
+        REPORTER_ASSERT(r, filter && !filter->isAlphaUnchanged());
+    }
 }

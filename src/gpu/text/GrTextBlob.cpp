@@ -149,9 +149,7 @@ void fill_transformed_vertices_3D(SkZip<Quad, const GrGlyph*, const VertexData> 
 
 // Check for integer translate with the same 2x2 matrix.
 std::tuple<bool, SkVector> check_integer_translate(
-        const GrTextBlob& blob, const SkMatrix& drawMatrix) {
-    const SkMatrix& initialMatrix = blob.initialMatrix();
-
+        const SkMatrix& initialMatrix, const SkMatrix& drawMatrix) {
     if (initialMatrix.getScaleX() != drawMatrix.getScaleX() ||
         initialMatrix.getScaleY() != drawMatrix.getScaleY() ||
         initialMatrix.getSkewX()  != drawMatrix.getSkewX()  ||
@@ -184,7 +182,7 @@ public:
               const SkGlyphRunList& glyphRunList,
               GrSurfaceDrawContext* rtc) const override;
 
-    bool canReuse(const SkPaint& paint, const SkMatrix& drawMatrix) override;
+    bool canReuse(const SkPaint& paint, const SkMatrix& drawMatrix) const override;
 
     GrAtlasSubRun* testingOnly_atlasSubRun() override;
 
@@ -201,7 +199,6 @@ private:
         SkPoint fOrigin;
     };
 
-    const GrTextBlob& fBlob;
     const bool fIsAntiAliased;
     const SkStrikeSpec fStrikeSpec;
     const SkSpan<const PathGlyph> fPaths;
@@ -213,8 +210,7 @@ PathSubRun::PathSubRun(bool isAntiAliased,
                        const GrTextBlob& blob,
                        SkSpan<PathGlyph> paths,
                        std::unique_ptr<PathGlyph[], GrSubRunAllocator::ArrayDestroyer> pathData)
-    : fBlob{blob}
-    , fIsAntiAliased{isAntiAliased}
+    : fIsAntiAliased{isAntiAliased}
     , fStrikeSpec{strikeSpec}
     , fPaths{paths}
     , fPathData{std::move(pathData)} {}
@@ -274,19 +270,8 @@ void PathSubRun::draw(const GrClip* clip,
     }
 }
 
-// This is the odd one. Intuition would lead you to believe that this should just return true
-// because it can handle all cases. The original code forced the check_integer_translate() for
-// paths explicitly. This check is needed because if the blob was drawn large, and then small, the
-// path would be reused when the blob should be rendered with masks.
-// TODO(herb): rethink when paths can be reused.
-bool PathSubRun::canReuse(const SkPaint& paint, const SkMatrix& drawMatrix) {
-    const SkMatrix initialMatrix = fBlob.initialMatrix();
-    if (initialMatrix.hasPerspective() && !SkMatrixPriv::CheapEqual(initialMatrix, drawMatrix)) {
-        return false;
-    }
-
-    auto [reuse, _] = check_integer_translate(fBlob, drawMatrix);
-    return reuse;
+bool PathSubRun::canReuse(const SkPaint& paint, const SkMatrix& drawMatrix) const {
+    return true;
 }
 
 auto PathSubRun::Make(
@@ -474,7 +459,7 @@ public:
               const SkGlyphRunList& glyphRunList,
               GrSurfaceDrawContext* rtc) const override;
 
-    bool canReuse(const SkPaint& paint, const SkMatrix& drawMatrix) override;
+    bool canReuse(const SkPaint& paint, const SkMatrix& drawMatrix) const override;
 
     GrAtlasSubRun* testingOnly_atlasSubRun() override;
 
@@ -580,12 +565,8 @@ void DirectMaskSubRun::draw(const GrClip* clip, const SkMatrixProvider& viewMatr
 }
 
 bool
-DirectMaskSubRun::canReuse(const SkPaint& paint, const SkMatrix& drawMatrix) {
-    if (drawMatrix.hasPerspective()) {
-        return false;
-    }
-
-    auto [reuse, translation] = check_integer_translate(*fBlob, drawMatrix);
+DirectMaskSubRun::canReuse(const SkPaint& paint, const SkMatrix& drawMatrix) const {
+    auto [reuse, translation] = check_integer_translate(fBlob->initialMatrix(), drawMatrix);
 
     // If glyphs were excluded because of position bounds, then this subrun can only be reused if
     // there is no change in position.
@@ -686,16 +667,17 @@ DirectMaskSubRun::makeAtlasTextOp(const GrClip* clip, const SkMatrixProvider& vi
     const SkPaint& drawPaint = glyphRunList.paint();
     const SkPMColor4f drawingColor =
             calculate_colors(rtc, drawPaint, viewMatrix, fMaskFormat, &grPaint);
-    GrAtlasTextOp::Geometry geometry = {
+
+    GrRecordingContext* const context = rtc->recordingContext();
+    GrAtlasTextOp::Geometry* geometry = GrAtlasTextOp::Geometry::Make(
+            context,
             *this,
             drawMatrix,
             drawOrigin,
             clipRect,
-            SkRef(fBlob),
-            drawingColor
-    };
+            sk_ref_sp<GrTextBlob>(fBlob),
+            drawingColor);
 
-    GrRecordingContext* const context = rtc->recordingContext();
     GrOp::Owner op = GrOp::Make<GrAtlasTextOp>(context,
                                                op_mask_type(fMaskFormat),
                                                false,
@@ -725,9 +707,9 @@ void direct_2D(SkZip<Mask2DVertex[4],
     for (auto[quad, glyph, leftTop] : quadData) {
         auto[al, at, ar, ab] = glyph->fAtlasLocator.getUVs();
         SkScalar dl = leftTop[0] + integralOriginOffset.x(),
-                dt = leftTop[1] + integralOriginOffset.y(),
-                dr = dl + (ar - al),
-                db = dt + (ab - at);
+                 dt = leftTop[1] + integralOriginOffset.y(),
+                 dr = dl + (ar - al),
+                 db = dt + (ab - at);
 
         quad[0] = {{dl, dt}, color, {al, at}};  // L,T
         quad[1] = {{dl, db}, color, {al, ab}};  // L,B
@@ -863,7 +845,7 @@ public:
               const SkGlyphRunList& glyphRunList,
               GrSurfaceDrawContext* rtc) const override;
 
-    bool canReuse(const SkPaint& paint, const SkMatrix& drawMatrix) override;
+    bool canReuse(const SkPaint& paint, const SkMatrix& drawMatrix) const override;
 
     GrAtlasSubRun* testingOnly_atlasSubRun() override;
 
@@ -953,7 +935,7 @@ void TransformedMaskSubRun::draw(const GrClip* clip,
 
 // If we are not scaling the cache entry to be larger, than a cache with smaller glyphs may be
 // better.
-bool TransformedMaskSubRun::canReuse(const SkPaint& paint, const SkMatrix& drawMatrix) {
+bool TransformedMaskSubRun::canReuse(const SkPaint& paint, const SkMatrix& drawMatrix) const {
     if (fBlob->initialMatrix().getMaxScale() < 1) {
         return false;
     }
@@ -974,18 +956,16 @@ TransformedMaskSubRun::makeAtlasTextOp(const GrClip* clip,
     GrPaint grPaint;
     SkPMColor4f drawingColor = calculate_colors(rtc, drawPaint, viewMatrix, fMaskFormat, &grPaint);
 
-    // We can clip geometrically using clipRect and ignore clip if we're not using SDFs or
-    // transformed glyphs, and we have an axis-aligned rectangular non-AA clip.
-    GrAtlasTextOp::Geometry geometry = {
+    GrRecordingContext* const context = rtc->recordingContext();
+    GrAtlasTextOp::Geometry* geometry = GrAtlasTextOp::Geometry::Make(
+            context,
             *this,
             drawMatrix,
             drawOrigin,
             SkIRect::MakeEmpty(),
-            SkRef(fBlob),
-            drawingColor
-    };
+            sk_ref_sp<GrTextBlob>(fBlob),
+            drawingColor);
 
-    GrRecordingContext* context = rtc->recordingContext();
     GrOp::Owner op = GrOp::Make<GrAtlasTextOp>(
             context,
             op_mask_type(fMaskFormat),
@@ -1115,7 +1095,7 @@ public:
               const SkGlyphRunList& glyphRunList,
               GrSurfaceDrawContext* rtc) const override;
 
-    bool canReuse(const SkPaint& paint, const SkMatrix& drawMatrix) override;
+    bool canReuse(const SkPaint& paint, const SkMatrix& drawMatrix) const override;
 
     GrAtlasSubRun* testingOnly_atlasSubRun() override;
 
@@ -1211,6 +1191,34 @@ UP<GrSubRun> SDFTSubRun::Make(
             has_some_antialiasing(runFont));
 }
 
+static std::tuple<GrAtlasTextOp::MaskType, uint32_t, bool> calculate_sdf_parameters(
+        const GrSurfaceDrawContext& rtc,
+        const SkMatrix& drawMatrix,
+        bool useLCDText,
+        bool isAntiAliased) {
+    const GrColorInfo& colorInfo = rtc.colorInfo();
+    const SkSurfaceProps& props = rtc.surfaceProps();
+    bool isBGR = SkPixelGeometryIsBGR(props.pixelGeometry());
+    bool isLCD = useLCDText && SkPixelGeometryIsH(props.pixelGeometry());
+    using MT = GrAtlasTextOp::MaskType;
+    MT maskType = !isAntiAliased ? MT::kAliasedDistanceField
+                                 : isLCD ? (isBGR ? MT::kLCDBGRDistanceField
+                                                  : MT::kLCDDistanceField)
+                                         : MT::kGrayscaleDistanceField;
+
+    bool useGammaCorrectDistanceTable = colorInfo.isLinearlyBlended();
+    uint32_t DFGPFlags = drawMatrix.isSimilarity() ? kSimilarity_DistanceFieldEffectFlag : 0;
+    DFGPFlags |= drawMatrix.isScaleTranslate() ? kScaleOnly_DistanceFieldEffectFlag : 0;
+    DFGPFlags |= useGammaCorrectDistanceTable ? kGammaCorrect_DistanceFieldEffectFlag : 0;
+    DFGPFlags |= MT::kAliasedDistanceField == maskType ? kAliased_DistanceFieldEffectFlag : 0;
+
+    if (isLCD) {
+        DFGPFlags |= kUseLCD_DistanceFieldEffectFlag;
+        DFGPFlags |= MT::kLCDBGRDistanceField == maskType ? kBGR_DistanceFieldEffectFlag : 0;
+    }
+    return {maskType, DFGPFlags, useGammaCorrectDistanceTable};
+}
+
 std::tuple<const GrClip*, GrOp::Owner >
 SDFTSubRun::makeAtlasTextOp(const GrClip* clip,
                             const SkMatrixProvider& viewMatrix,
@@ -1226,37 +1234,19 @@ SDFTSubRun::makeAtlasTextOp(const GrClip* clip,
     GrPaint grPaint;
     SkPMColor4f drawingColor = calculate_colors(rtc, drawPaint, viewMatrix, fMaskFormat, &grPaint);
 
-    const GrColorInfo& colorInfo = rtc->colorInfo();
-    const SkSurfaceProps& props = rtc->surfaceProps();
-    bool isBGR = SkPixelGeometryIsBGR(props.pixelGeometry());
-    bool isLCD = fUseLCDText && SkPixelGeometryIsH(props.pixelGeometry());
-    using MT = GrAtlasTextOp::MaskType;
-    MT maskType = !fAntiAliased ? MT::kAliasedDistanceField
-                                : isLCD ? (isBGR ? MT::kLCDBGRDistanceField
-                                                 : MT::kLCDDistanceField)
-                                        : MT::kGrayscaleDistanceField;
+    auto [maskType, DFGPFlags, useGammaCorrectDistanceTable] =
+        calculate_sdf_parameters(*rtc, drawMatrix, fUseLCDText, fAntiAliased);
 
-    bool useGammaCorrectDistanceTable = colorInfo.isLinearlyBlended();
-    uint32_t DFGPFlags = drawMatrix.isSimilarity() ? kSimilarity_DistanceFieldEffectFlag : 0;
-    DFGPFlags |= drawMatrix.isScaleTranslate() ? kScaleOnly_DistanceFieldEffectFlag : 0;
-    DFGPFlags |= useGammaCorrectDistanceTable ? kGammaCorrect_DistanceFieldEffectFlag : 0;
-    DFGPFlags |= MT::kAliasedDistanceField == maskType ? kAliased_DistanceFieldEffectFlag : 0;
-
-    if (isLCD) {
-        DFGPFlags |= kUseLCD_DistanceFieldEffectFlag;
-        DFGPFlags |= MT::kLCDBGRDistanceField == maskType ? kBGR_DistanceFieldEffectFlag : 0;
-    }
-
-    GrAtlasTextOp::Geometry geometry = {
+    GrRecordingContext* const context = rtc->recordingContext();
+    GrAtlasTextOp::Geometry* geometry = GrAtlasTextOp::Geometry::Make(
+            context,
             *this,
             drawMatrix,
             drawOrigin,
             SkIRect::MakeEmpty(),
-            SkRef(fBlob),
-            drawingColor
-    };
+            sk_ref_sp<GrTextBlob>(fBlob),
+            drawingColor);
 
-    GrRecordingContext* context = rtc->recordingContext();
     GrOp::Owner op = GrOp::Make<GrAtlasTextOp>(
             context,
             maskType,
@@ -1282,11 +1272,8 @@ void SDFTSubRun::draw(const GrClip* clip,
     }
 }
 
-bool SDFTSubRun::canReuse(const SkPaint& paint, const SkMatrix& drawMatrix) {
+bool SDFTSubRun::canReuse(const SkPaint& paint, const SkMatrix& drawMatrix) const {
     const SkMatrix& initialMatrix = fBlob->initialMatrix();
-    if (drawMatrix.hasPerspective()) {
-        return false;
-    }
 
     // A scale outside of [blob.fMaxMinScale, blob.fMinMaxScale] would result in a different
     // distance field being generated, so we have to regenerate in those cases
@@ -1368,6 +1355,21 @@ bool GrTextBlob::Key::operator==(const GrTextBlob::Key& that) const {
         }
     }
     if (fScalerContextFlags != that.fScalerContextFlags) { return false; }
+
+    // Just punt on perspective.
+    if (fDrawMatrix.hasPerspective()) {
+        return false;
+    }
+
+    if (fSetOfDrawingTypes != that.fSetOfDrawingTypes) {
+        return false;
+    }
+
+    if (fSetOfDrawingTypes & GrSDFTOptions::kDirect) {
+        auto [compatible, _] = check_integer_translate(fDrawMatrix, that.fDrawMatrix);
+        return compatible;
+    }
+
     return true;
 }
 
@@ -1412,13 +1414,7 @@ void GrTextBlob::addKey(const Key& key) {
 
 bool GrTextBlob::hasPerspective() const { return fInitialMatrix.hasPerspective(); }
 
-void GrTextBlob::setMinAndMaxScale(SkScalar scaledMin, SkScalar scaledMax) {
-    // we init fMaxMinScale and fMinMaxScale in the constructor
-    fMaxMinScale = std::max(scaledMin, fMaxMinScale);
-    fMinMaxScale = std::min(scaledMax, fMinMaxScale);
-}
-
-bool GrTextBlob::canReuse(const SkPaint& paint, const SkMatrix& drawMatrix) {
+bool GrTextBlob::canReuse(const SkPaint& paint, const SkMatrix& drawMatrix) const {
     // A singular matrix will create a GrTextBlob with no SubRuns, but unknown glyphs can
     // also cause empty runs. If there are no subRuns, then regenerate.
     if ((fSubRunList.isEmpty() || fSomeGlyphsExcluded) && fInitialMatrix != drawMatrix) {
@@ -1433,7 +1429,7 @@ bool GrTextBlob::canReuse(const SkPaint& paint, const SkMatrix& drawMatrix) {
         return false;
     }
 
-    for (GrSubRun& subRun : this->fSubRunList) {
+    for (const GrSubRun& subRun : fSubRunList) {
         if (!subRun.canReuse(paint, drawMatrix)) {
             return false;
         }
@@ -1487,6 +1483,20 @@ GrTextBlob::GrTextBlob(int allocSize,
         , fInitialMatrix{drawMatrix}
         , fInitialLuminance{initialLuminance} { }
 
+void GrTextBlob::makeSubRuns(SkGlyphRunListPainter* painter,
+                             const SkGlyphRunList& glyphRunList,
+                             const SkMatrix& drawMatrix,
+                             const SkPaint& runPaint,
+                             const GrSDFTOptions& options) {
+    for (auto& glyphRun : glyphRunList) {
+        painter->processGlyphRun(glyphRun,
+                                 drawMatrix,
+                                 runPaint,
+                                 options,
+                                 this);
+    }
+}
+
 void GrTextBlob::processDeviceMasks(const SkZip<SkGlyphVariant, SkPoint>& drawables,
                                     const SkStrikeSpec& strikeSpec) {
 
@@ -1508,7 +1518,9 @@ void GrTextBlob::processSourceSDFT(const SkZip<SkGlyphVariant, SkPoint>& drawabl
                                    const SkFont& runFont,
                                    SkScalar minScale,
                                    SkScalar maxScale) {
-    this->setMinAndMaxScale(minScale, maxScale);
+
+    fMaxMinScale = std::max(minScale, fMaxMinScale);
+    fMinMaxScale = std::min(maxScale, fMinMaxScale);
     fSubRunList.append(SDFTSubRun::Make(drawables, runFont, strikeSpec, this, &fAlloc));
 }
 
@@ -1547,7 +1559,7 @@ GrBagOfBytes::Block::Block(char* previous, char* startOfBlock)
         : fBlockStart{startOfBlock}
         , fPrevious{reinterpret_cast<Block*>(previous)} {}
 
-char* GrBagOfBytes::alignedBytes(int size, int alignment) {
+void* GrBagOfBytes::alignedBytes(int size, int alignment) {
     SkASSERT_RELEASE(0 < size && size < kMaxByteSize);
     SkASSERT_RELEASE(0 < alignment && alignment <= kMaxAlignment);
     SkASSERT_RELEASE(SkIsPow2(alignment));
@@ -1587,6 +1599,6 @@ GrSubRunAllocator::GrSubRunAllocator(char* bytes, int size, int firstHeapAllocat
 GrSubRunAllocator::GrSubRunAllocator(int firstHeapAllocation)
         : GrSubRunAllocator(nullptr, 0, firstHeapAllocation) {}
 
-char* GrSubRunAllocator::alignedBytes(int unsafeSize, int unsafeAlignment) {
+void* GrSubRunAllocator::alignedBytes(int unsafeSize, int unsafeAlignment) {
     return fAlloc.alignedBytes(unsafeSize, unsafeAlignment);
 }

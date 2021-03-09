@@ -77,7 +77,7 @@
 
 //////////////////////////////////////////////////////////////////////////////
 
-using SimplifyStroke = GrStyledShape::SimplifyStroke;
+using DoSimplify = GrStyledShape::DoSimplify;
 
 class AutoCheckFlush {
 public:
@@ -364,7 +364,10 @@ void GrSurfaceDrawContext::drawGlyphRunList(const GrClip* clip,
         return;
     }
 
-    GrSDFTOptions options = fContext->priv().SDFTOptions();
+    GrSDFTOptions options =
+            this->recordingContext()->priv().getSDFTOptions(
+                    this->surfaceProps().isUseDeviceIndependentFonts());
+
     GrTextBlobCache* textBlobCache = fContext->priv().getTextBlobCache();
 
     // Get the first paint to use as the key paint.
@@ -383,6 +386,9 @@ void GrSurfaceDrawContext::drawGlyphRunList(const GrClip* clip,
     SkScalerContextFlags scalerContextFlags = this->colorInfo().isLinearlyBlended()
                                               ? SkScalerContextFlags::kBoostContrast
                                               : SkScalerContextFlags::kFakeGammaAndBoostContrast;
+    SkMatrix drawMatrix(viewMatrix.localToDevice());
+    SkPoint drawOrigin = glyphRunList.origin();
+    drawMatrix.preTranslate(drawOrigin.x(), drawOrigin.y());
 
     sk_sp<GrTextBlob> blob;
     GrTextBlob::Key key;
@@ -409,14 +415,33 @@ void GrSurfaceDrawContext::drawGlyphRunList(const GrClip* clip,
         }
         key.fCanonicalColor = canonicalColor;
         key.fScalerContextFlags = scalerContextFlags;
+
+        // Calculate the set of drawing types.
+        key.fSetOfDrawingTypes = 0;
+        for (auto& run : glyphRunList) {
+            key.fSetOfDrawingTypes |= options.drawingType(run.font(), drawPaint, drawMatrix);
+        }
+
+        if (key.fSetOfDrawingTypes & GrSDFTOptions::kDirect) {
+            // Store the fractional offset of the position. We know that the matrix can't be
+            // perspective at this point.
+            SkPoint mappedOrigin = drawMatrix.mapOrigin();
+            key.fDrawMatrix = drawMatrix;
+            key.fDrawMatrix.setTranslateX(
+                    mappedOrigin.x() - SkScalarFloorToScalar(mappedOrigin.x()));
+            key.fDrawMatrix.setTranslateY(
+                    mappedOrigin.y() - SkScalarFloorToScalar(mappedOrigin.y()));
+        } else {
+            // For path and SDFT, the matrix doesn't matter.
+            key.fDrawMatrix = SkMatrix::I();
+        }
+
         blob = textBlobCache->find(key);
     }
 
-    SkMatrix drawMatrix(viewMatrix.localToDevice());
-    SkPoint drawOrigin = glyphRunList.origin();
-    drawMatrix.preTranslate(drawOrigin.x(), drawOrigin.y());
     if (blob == nullptr || !blob->canReuse(drawPaint, drawMatrix)) {
         if (blob != nullptr) {
+            SkASSERT(!drawMatrix.hasPerspective());
             // We have to remake the blob because changes may invalidate our masks.
             // TODO we could probably get away with reuse most of the time if the pointer is unique,
             //      but we'd have to clear the SubRun information
@@ -424,26 +449,21 @@ void GrSurfaceDrawContext::drawGlyphRunList(const GrClip* clip,
         }
 
         blob = GrTextBlob::Make(glyphRunList, drawMatrix);
+        blob->makeSubRuns(&fGlyphPainter,
+                          glyphRunList,
+                          drawMatrix,
+                          drawPaint,
+                          options);
+
         if (canCache) {
             blob->addKey(key);
-            textBlobCache->add(glyphRunList, blob);
-        }
-
-        // TODO(herb): redo processGlyphRunList to handle shifted draw matrix.
-        bool supportsSDFT = fContext->priv().caps()->shaderCaps()->supportsDistanceFieldText();
-        for (auto& glyphRun : glyphRunList) {
-            fGlyphPainter.processGlyphRun(glyphRun,
-                                          viewMatrix.localToDevice(),
-                                          drawOrigin,
-                                          drawPaint,
-                                          fSurfaceProps,
-                                          supportsSDFT,
-                                          options,
-                                          blob.get());
+            // The blob may already have been created on a different thread. Use the first one
+            // that was there.
+            blob = textBlobCache->addOrReturnExisting(glyphRunList, blob);
         }
     }
 
-    for (GrSubRun& subRun : blob->subRunList()) {
+    for (const GrSubRun& subRun : blob->subRunList()) {
         subRun.draw(clip, viewMatrix, glyphRunList, this);
     }
 }
@@ -723,7 +743,7 @@ void GrSurfaceDrawContext::drawRect(const GrClip* clip,
     }
     assert_alive(paint);
     this->drawShapeUsingPathRenderer(clip, std::move(paint), aa, viewMatrix,
-                                     GrStyledShape(rect, *style, SimplifyStroke::kNo));
+                                     GrStyledShape(rect, *style, DoSimplify::kNo));
 }
 
 void GrSurfaceDrawContext::drawQuadSet(const GrClip* clip,
@@ -1017,7 +1037,7 @@ void GrSurfaceDrawContext::drawRRect(const GrClip* origClip,
 
     assert_alive(paint);
     this->drawShapeUsingPathRenderer(clip, std::move(paint), aa, viewMatrix,
-                                     GrStyledShape(rrect, style, SimplifyStroke::kNo));
+                                     GrStyledShape(rrect, style, DoSimplify::kNo));
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -1344,7 +1364,8 @@ void GrSurfaceDrawContext::drawDRRect(const GrClip* clip,
     path.addRRect(inner);
     path.addRRect(outer);
     path.setFillType(SkPathFillType::kEvenOdd);
-    this->drawShapeUsingPathRenderer(clip, std::move(paint), aa, viewMatrix, GrStyledShape(path));
+    this->drawShapeUsingPathRenderer(clip, std::move(paint), aa, viewMatrix,
+                                     GrStyledShape(path, DoSimplify::kNo));
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -1443,7 +1464,7 @@ void GrSurfaceDrawContext::drawOval(const GrClip* clip,
     assert_alive(paint);
     this->drawShapeUsingPathRenderer(clip, std::move(paint), aa, viewMatrix,
                                      GrStyledShape(SkRRect::MakeOval(oval), SkPathDirection::kCW, 2,
-                                                   false, style, SimplifyStroke::kNo));
+                                                   false, style, DoSimplify::kNo));
 }
 
 void GrSurfaceDrawContext::drawArc(const GrClip* clip,
@@ -1482,7 +1503,7 @@ void GrSurfaceDrawContext::drawArc(const GrClip* clip,
     }
     this->drawShapeUsingPathRenderer(clip, std::move(paint), aa, viewMatrix,
                                      GrStyledShape::MakeArc(oval, startAngle, sweepAngle, useCenter,
-                                                            style, SimplifyStroke::kNo));
+                                                            style, DoSimplify::kNo));
 }
 
 void GrSurfaceDrawContext::drawImageLattice(const GrClip* clip,
@@ -1560,7 +1581,7 @@ void GrSurfaceDrawContext::drawPath(const GrClip* clip,
     SkDEBUGCODE(this->validate();)
     GR_CREATE_TRACE_MARKER_CONTEXT("GrSurfaceDrawContext", "drawPath", fContext);
 
-    GrStyledShape shape(path, style, SimplifyStroke::kNo);
+    GrStyledShape shape(path, style, DoSimplify::kNo);
     this->drawShape(clip, std::move(paint), aa, viewMatrix, std::move(shape));
 }
 
@@ -1818,7 +1839,7 @@ void GrSurfaceDrawContext::drawShapeUsingPathRenderer(const GrClip* clip,
 
     if (!pr) {
         // The shape isn't a stroke that can be drawn directly. Simplify if possible.
-        shape.simplifyStroke();
+        shape.simplify();
 
         if (shape.isEmpty() && !shape.inverseFilled()) {
             return;

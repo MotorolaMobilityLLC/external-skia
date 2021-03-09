@@ -25,6 +25,7 @@
 #include "src/gpu/GrBitmapTextureMaker.h"
 #include "src/gpu/GrCaps.h"
 #include "src/gpu/GrColorSpaceXform.h"
+#include "src/gpu/GrContextThreadSafeProxyPriv.h"
 #include "src/gpu/GrDirectContextPriv.h"
 #include "src/gpu/GrDrawingManager.h"
 #include "src/gpu/GrGpu.h"
@@ -61,6 +62,10 @@ SkImage_Gpu::SkImage_Gpu(sk_sp<GrImageContext> context, uint32_t uniqueID, GrSur
 }
 
 SkImage_Gpu::~SkImage_Gpu() {}
+
+bool SkImage_Gpu::surfaceMustCopyOnWrite(GrSurfaceProxy* surfaceProxy) const {
+    return surfaceProxy->underlyingUniqueID() == fView.proxy()->underlyingUniqueID();
+}
 
 GrSemaphoresSubmitted SkImage_Gpu::onFlush(GrDirectContext* dContext, const GrFlushInfo& info) {
     if (!fContext->priv().matches(dContext) || dContext->abandoned()) {
@@ -373,17 +378,17 @@ sk_sp<SkImage> SkImage::makeTextureImage(GrDirectContext* dContext,
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-sk_sp<SkImage> SkImage_Gpu::MakePromiseTexture(GrRecordingContext* context,
-                                               const GrBackendFormat& backendFormat,
-                                               SkISize dimensions,
-                                               GrMipmapped mipMapped,
-                                               GrSurfaceOrigin origin,
-                                               SkColorType colorType,
-                                               SkAlphaType alphaType,
-                                               sk_sp<SkColorSpace> colorSpace,
-                                               PromiseImageTextureFulfillProc textureFulfillProc,
-                                               PromiseImageTextureReleaseProc textureReleaseProc,
-                                               PromiseImageTextureContext textureContext) {
+sk_sp<SkImage> SkImage::MakePromiseTexture(sk_sp<GrContextThreadSafeProxy> threadSafeProxy,
+                                           const GrBackendFormat& backendFormat,
+                                           SkISize dimensions,
+                                           GrMipmapped mipMapped,
+                                           GrSurfaceOrigin origin,
+                                           SkColorType colorType,
+                                           SkAlphaType alphaType,
+                                           sk_sp<SkColorSpace> colorSpace,
+                                           PromiseImageTextureFulfillProc textureFulfillProc,
+                                           PromiseImageTextureReleaseProc textureReleaseProc,
+                                           PromiseImageTextureContext textureContext) {
     // Our contract is that we will always call the release proc even on failure.
     // We use the helper to convey the context, so we need to ensure make doesn't fail.
     textureReleaseProc = textureReleaseProc ? textureReleaseProc : [](void*) {};
@@ -393,7 +398,7 @@ sk_sp<SkImage> SkImage_Gpu::MakePromiseTexture(GrRecordingContext* context,
         return nullptr;
     }
 
-    if (!context) {
+    if (!threadSafeProxy) {
         return nullptr;
     }
 
@@ -401,31 +406,32 @@ sk_sp<SkImage> SkImage_Gpu::MakePromiseTexture(GrRecordingContext* context,
         return nullptr;
     }
 
-    GrColorType grColorType = SkColorTypeAndFormatToGrColorType(context->priv().caps(),
+    GrColorType grColorType = SkColorTypeAndFormatToGrColorType(threadSafeProxy->priv().caps(),
                                                                 colorType,
                                                                 backendFormat);
     if (GrColorType::kUnknown == grColorType) {
         return nullptr;
     }
 
-    if (!context->priv().caps()->areColorTypeAndFormatCompatible(grColorType, backendFormat)) {
+    if (!threadSafeProxy->priv().caps()->areColorTypeAndFormatCompatible(grColorType,
+                                                                         backendFormat)) {
         return nullptr;
     }
 
-    auto proxy = MakePromiseImageLazyProxy(context,
-                                           dimensions,
-                                           backendFormat,
-                                           mipMapped,
-                                           textureFulfillProc,
-                                           std::move(releaseHelper));
+    auto proxy = SkImage_GpuBase::MakePromiseImageLazyProxy(threadSafeProxy.get(),
+                                                            dimensions,
+                                                            backendFormat,
+                                                            mipMapped,
+                                                            textureFulfillProc,
+                                                            std::move(releaseHelper));
     if (!proxy) {
         return nullptr;
     }
-    GrSwizzle swizzle = context->priv().caps()->getReadSwizzle(backendFormat, grColorType);
+    GrSwizzle swizzle = threadSafeProxy->priv().caps()->getReadSwizzle(backendFormat, grColorType);
     GrSurfaceProxyView view(std::move(proxy), origin, swizzle);
-    // CONTEXT TODO: rm this usage of the 'backdoor' to create an image
-    return sk_make_sp<SkImage_Gpu>(sk_ref_sp(context), kNeedNewImageUniqueID,
-                                   std::move(view), colorType, alphaType, std::move(colorSpace));
+    sk_sp<GrImageContext> ctx(GrImageContextPriv::MakeForPromiseImage(std::move(threadSafeProxy)));
+    return sk_make_sp<SkImage_Gpu>(std::move(ctx), kNeedNewImageUniqueID, std::move(view),
+                                   colorType, alphaType, std::move(colorSpace));
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////

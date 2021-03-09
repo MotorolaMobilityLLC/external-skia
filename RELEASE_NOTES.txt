@@ -4,10 +4,22 @@ This file includes a list of high level updates for each milestone release.
 
 * * *
 
+Milestone 91
+------------
+
+ *
+
+* * *
+
 Milestone 90
 ------------
-  * GrDirectContext::ComputeImageSize() no longer takes nextPow2 argument.
+  * Renamed use of sk_cf_obj in external Metal types to sk_cfp.
+    https://review.skia.org/372556
+
+  * GrDirectContext::ComputeImageSize() is removed. Use SkImage::textureSize() instead.
     https://review.skia.org/368621
+    https://review.skia.org/369317
+    https://review.skia.org/371958
 
   * Remove SkImageFilter::MakeMatrixFilter as it was unused and replaced with
     SkImageFilters::MatrixTransform.
@@ -52,6 +64,10 @@ Milestone 90
     - Move saturation of RGBA to after multiplying lighting intensity with the lighting color, which
       improves rendering when diffuse and specular constants are greater than 1.
     https://review.skia.org/355496
+
+  * SkDeferredDisplayListRecorder::makePromiseTexture has moved to SkImage::MakePromiseTexture.
+    New code should use the new entry point – migration CLs will be coming soon.
+    https://review.skia.org/373716
 
 Milestone 89
 ------------

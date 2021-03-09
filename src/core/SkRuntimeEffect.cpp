@@ -15,7 +15,9 @@
 #include "src/core/SkColorFilterBase.h"
 #include "src/core/SkColorSpacePriv.h"
 #include "src/core/SkColorSpaceXformSteps.h"
+#include "src/core/SkLRUCache.h"
 #include "src/core/SkMatrixProvider.h"
+#include "src/core/SkOpts.h"
 #include "src/core/SkRasterPipeline.h"
 #include "src/core/SkReadBuffer.h"
 #include "src/core/SkUtils.h"
@@ -105,39 +107,66 @@ static bool parse_marker(const SkSL::StringFragment& marker, uint32_t* id, uint3
 static bool init_uniform_type(const SkSL::Context& ctx,
                               const SkSL::Type* type,
                               SkRuntimeEffect::Uniform* v) {
-#define SET_TYPES(cpu_type, gpu_type)                       \
-    do {                                                    \
-        v->type = SkRuntimeEffect::Uniform::Type::cpu_type; \
-        v->gpuType = gpu_type;                              \
-        return true;                                        \
-    } while (false)
+    using Type = SkRuntimeEffect::Uniform::Type;
 
-    if (type == ctx.fTypes.fFloat.get())    { SET_TYPES(kFloat,    kFloat_GrSLType);    }
-    if (type == ctx.fTypes.fHalf.get())     { SET_TYPES(kFloat,    kHalf_GrSLType);     }
-    if (type == ctx.fTypes.fFloat2.get())   { SET_TYPES(kFloat2,   kFloat2_GrSLType);   }
-    if (type == ctx.fTypes.fHalf2.get())    { SET_TYPES(kFloat2,   kHalf2_GrSLType);    }
-    if (type == ctx.fTypes.fFloat3.get())   { SET_TYPES(kFloat3,   kFloat3_GrSLType);   }
-    if (type == ctx.fTypes.fHalf3.get())    { SET_TYPES(kFloat3,   kHalf3_GrSLType);    }
-    if (type == ctx.fTypes.fFloat4.get())   { SET_TYPES(kFloat4,   kFloat4_GrSLType);   }
-    if (type == ctx.fTypes.fHalf4.get())    { SET_TYPES(kFloat4,   kHalf4_GrSLType);    }
-    if (type == ctx.fTypes.fFloat2x2.get()) { SET_TYPES(kFloat2x2, kFloat2x2_GrSLType); }
-    if (type == ctx.fTypes.fHalf2x2.get())  { SET_TYPES(kFloat2x2, kHalf2x2_GrSLType);  }
-    if (type == ctx.fTypes.fFloat3x3.get()) { SET_TYPES(kFloat3x3, kFloat3x3_GrSLType); }
-    if (type == ctx.fTypes.fHalf3x3.get())  { SET_TYPES(kFloat3x3, kHalf3x3_GrSLType);  }
-    if (type == ctx.fTypes.fFloat4x4.get()) { SET_TYPES(kFloat4x4, kFloat4x4_GrSLType); }
-    if (type == ctx.fTypes.fHalf4x4.get())  { SET_TYPES(kFloat4x4, kHalf4x4_GrSLType);  }
-
-#undef SET_TYPES
+    if (type == ctx.fTypes.fFloat.get())    { v->type = Type::kFloat;    return true; }
+    if (type == ctx.fTypes.fHalf.get())     { v->type = Type::kFloat;    return true; }
+    if (type == ctx.fTypes.fFloat2.get())   { v->type = Type::kFloat2;   return true; }
+    if (type == ctx.fTypes.fHalf2.get())    { v->type = Type::kFloat2;   return true; }
+    if (type == ctx.fTypes.fFloat3.get())   { v->type = Type::kFloat3;   return true; }
+    if (type == ctx.fTypes.fHalf3.get())    { v->type = Type::kFloat3;   return true; }
+    if (type == ctx.fTypes.fFloat4.get())   { v->type = Type::kFloat4;   return true; }
+    if (type == ctx.fTypes.fHalf4.get())    { v->type = Type::kFloat4;   return true; }
+    if (type == ctx.fTypes.fFloat2x2.get()) { v->type = Type::kFloat2x2; return true; }
+    if (type == ctx.fTypes.fHalf2x2.get())  { v->type = Type::kFloat2x2; return true; }
+    if (type == ctx.fTypes.fFloat3x3.get()) { v->type = Type::kFloat3x3; return true; }
+    if (type == ctx.fTypes.fHalf3x3.get())  { v->type = Type::kFloat3x3; return true; }
+    if (type == ctx.fTypes.fFloat4x4.get()) { v->type = Type::kFloat4x4; return true; }
+    if (type == ctx.fTypes.fHalf4x4.get())  { v->type = Type::kFloat4x4; return true; }
 
     return false;
 }
 
+SK_BEGIN_REQUIRE_DENSE;
+struct Key {
+    uint32_t skslHashA;
+    uint32_t skslHashB;
+    int      inlineThreshold;
+
+    bool operator==(const Key& that) const {
+        return this->skslHashA        == that.skslHashA
+            && this->skslHashB        == that.skslHashB
+            && this->inlineThreshold  == that.inlineThreshold;
+    }
+
+    Key(const SkString& sksl, const SkRuntimeEffect::Options& options)
+        : skslHashA(SkOpts::hash(sksl.c_str(), sksl.size(), 0))
+        , skslHashB(SkOpts::hash(sksl.c_str(), sksl.size(), 1))
+        , inlineThreshold(options.inlineThreshold) {}
+};
+SK_END_REQUIRE_DENSE;
+
+
+static std::tuple<SkAutoMutexExclusive, SkLRUCache<Key, sk_sp<SkRuntimeEffect>>*> locked_cache() {
+    static auto* mutex = new SkMutex;
+    static auto* cache = new SkLRUCache<Key, sk_sp<SkRuntimeEffect>>(11/*totally arbitrary*/);
+    return { *mutex, cache };
+}
+
 SkRuntimeEffect::Result SkRuntimeEffect::Make(SkString sksl, const Options& options) {
+    Key key(sksl, options);
+    {
+        auto [locked, cache] = locked_cache();
+        if (sk_sp<SkRuntimeEffect>* found = cache->find(key)) {
+            return Result{*found, SkString()};
+        }
+    }
+
     SkSL::SharedCompiler compiler;
     SkSL::Program::Settings settings;
     settings.fInlineThreshold = options.inlineThreshold;
     settings.fAllowNarrowingConversions = true;
-    auto program = compiler->convertProgram(SkSL::Program::kRuntimeEffect_Kind,
+    auto program = compiler->convertProgram(SkSL::ProgramKind::kRuntimeEffect,
                                             SkSL::String(sksl.c_str(), sksl.size()),
                                             settings);
     // TODO: Many errors aren't caught until we process the generated Program here. Catching those
@@ -253,6 +282,10 @@ SkRuntimeEffect::Result SkRuntimeEffect::Make(SkString sksl, const Options& opti
                                                       std::move(varyings),
                                                       usesSampleCoords,
                                                       allowColorFilter));
+    {
+        auto [locked, cache] = locked_cache();
+        cache->insert_or_update(key, effect);
+    }
     return Result{std::move(effect), SkString()};
 }
 
@@ -460,6 +493,21 @@ public:
 
         return SkSL::ProgramToSkVM(*fEffect->fBaseProgram, fEffect->fMain, p, uniform,
                                    /*device=*/zeroCoord, /*local=*/zeroCoord, sampleChild);
+    }
+
+    uint32_t onGetFlags() const override {
+        skvm::Builder  p;
+        SkColorSpace*  dstCS = sk_srgb_singleton();  // This _shouldn't_ matter for alpha.
+        skvm::Uniforms uniforms{p.uniform(), 0};
+        SkArenaAlloc   alloc{16};
+
+        skvm::Color in = p.load({skvm::PixelFormat::FLOAT, 32,32,32,32, 0,32,64,96}, p.arg(16)),
+                   out = this->onProgram(&p,in,dstCS,&uniforms,&alloc);
+
+        if (out.a.id == in.a.id) {
+            return SkColorFilter::kAlphaUnchanged_Flag;
+        }
+        return 0;
     }
 
     void flatten(SkWriteBuffer& buffer) const override {

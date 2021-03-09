@@ -52,7 +52,7 @@ sk_sp<GrGLProgram> GrGLProgramBuilder::CreateProgram(
                                                const GrProgramDesc& desc,
                                                const GrProgramInfo& programInfo,
                                                const GrGLPrecompiledProgram* precompiledProgram) {
-    ATRACE_ANDROID_FRAMEWORK_ALWAYS("shader_compile");
+    TRACE_EVENT0_ALWAYS("skia.gpu", "shader_compile");
     GrAutoLocaleSetter als("C");
 
     // create a builder.  This will be handed off to effects so they can use it to add
@@ -106,7 +106,7 @@ bool GrGLProgramBuilder::compileAndAttachShaders(const SkSL::String& glsl,
                                                    programId,
                                                    type,
                                                    glsl,
-                                                   gpu->stats(),
+                                                   gpu->pipelineBuilder()->stats(),
                                                    errHandler);
     if (!shaderId) {
         return false;
@@ -166,6 +166,7 @@ void GrGLProgramBuilder::storeShaderInCache(const SkSL::Program::Inputs& inputs,
         return;
     }
     sk_sp<SkData> key = SkData::MakeWithoutCopy(this->desc().asKey(), this->desc().keyLength());
+    const SkString& description = this->desc().description();
     if (fGpu->glCaps().programBinarySupport()) {
         // binary cache
         GrGLsizei length = 0;
@@ -186,7 +187,7 @@ void GrGLProgramBuilder::storeShaderInCache(const SkSL::Program::Inputs& inputs,
             writer.writePad32(binary.get(), length);
 
             auto data = writer.snapshotAsData();
-            this->gpu()->getContext()->priv().getPersistentCache()->store(*key, *data);
+            this->gpu()->getContext()->priv().getPersistentCache()->store(*key, *data, description);
         }
     } else {
         // source cache, plus metadata to allow for a complete precompile
@@ -203,7 +204,7 @@ void GrGLProgramBuilder::storeShaderInCache(const SkSL::Program::Inputs& inputs,
 
         auto data = GrPersistentCacheUtils::PackCachedShaders(isSkSL ? kSKSL_Tag : kGLSL_Tag,
                                                               shaders, &inputs, 1, &meta);
-        this->gpu()->getContext()->priv().getPersistentCache()->store(*key, *data);
+        this->gpu()->getContext()->priv().getPersistentCache()->store(*key, *data, description);
     }
 }
 
@@ -260,7 +261,7 @@ sk_sp<GrGLProgram> GrGLProgramBuilder::finalize(const GrGLPrecompiledProgram* pr
         this->computeCountsAndStrides(programID, primProc, false);
         usedProgramBinaries = true;
     } else if (cached) {
-        ATRACE_ANDROID_FRAMEWORK_ALWAYS("cache_hit");
+        TRACE_EVENT0_ALWAYS("skia.gpu", "cache_hit");
         SkReadBuffer reader(fCached->data(), fCached->size());
         SkFourByteTag shaderType = GrPersistentCacheUtils::GetType(&reader);
 
@@ -322,7 +323,7 @@ sk_sp<GrGLProgram> GrGLProgramBuilder::finalize(const GrGLPrecompiledProgram* pr
         }
     }
     if (!usedProgramBinaries) {
-        ATRACE_ANDROID_FRAMEWORK_ALWAYS("cache_miss");
+        TRACE_EVENT0_ALWAYS("skia.gpu", "cache_miss");
         // Either a cache miss, or we got something other than binaries from the cache
 
         /*
@@ -334,7 +335,7 @@ sk_sp<GrGLProgram> GrGLProgramBuilder::finalize(const GrGLPrecompiledProgram* pr
                 settings.fForceHighPrecision = true;
             }
             std::unique_ptr<SkSL::Program> fs = GrSkSLtoGLSL(this->gpu(),
-                                                             SkSL::Program::kFragment_Kind,
+                                                             SkSL::ProgramKind::kFragment,
                                                              *sksl[kFragment_GrShaderType],
                                                              settings,
                                                              &glsl[kFragment_GrShaderType],
@@ -359,7 +360,7 @@ sk_sp<GrGLProgram> GrGLProgramBuilder::finalize(const GrGLPrecompiledProgram* pr
         if (glsl[kVertex_GrShaderType].empty()) {
             // Don't have cached GLSL, need to compile SkSL->GLSL
             std::unique_ptr<SkSL::Program> vs = GrSkSLtoGLSL(this->gpu(),
-                                                             SkSL::Program::kVertex_Kind,
+                                                             SkSL::ProgramKind::kVertex,
                                                              *sksl[kVertex_GrShaderType],
                                                              settings,
                                                              &glsl[kVertex_GrShaderType],
@@ -423,7 +424,7 @@ sk_sp<GrGLProgram> GrGLProgramBuilder::finalize(const GrGLPrecompiledProgram* pr
                 // Don't have cached GLSL, need to compile SkSL->GLSL
                 std::unique_ptr<SkSL::Program> gs;
                 gs = GrSkSLtoGLSL(this->gpu(),
-                                  SkSL::Program::kGeometry_Kind,
+                                  SkSL::ProgramKind::kGeometry,
                                   *sksl[kGeometry_GrShaderType],
                                   settings,
                                   &glsl[kGeometry_GrShaderType],
@@ -442,11 +443,14 @@ sk_sp<GrGLProgram> GrGLProgramBuilder::finalize(const GrGLPrecompiledProgram* pr
         }
         this->bindProgramResourceLocations(programID);
 
-        GL_CALL(LinkProgram(programID));
-        if (checkLinked) {
-            if (!this->checkLinkStatus(programID, errorHandler, sksl, glsl)) {
-                cleanup_program(fGpu, programID, shadersToDelete);
-                return nullptr;
+        {
+            TRACE_EVENT0_ALWAYS("skia.gpu", "driver_link_program");
+            GL_CALL(LinkProgram(programID));
+            if (checkLinked) {
+                if (!this->checkLinkStatus(programID, errorHandler, sksl, glsl)) {
+                    cleanup_program(fGpu, programID, shadersToDelete);
+                    return nullptr;
+                }
             }
         }
     }
@@ -563,7 +567,7 @@ sk_sp<GrGLProgram> GrGLProgramBuilder::createProgram(GrGLuint programID) {
                              fVaryingHandler.fPathProcVaryingInfos,
                              std::move(fGeometryProcessor),
                              std::move(fXferProcessor),
-                             std::move(fFragmentProcessors),
+                             std::move(fFPImpls),
                              std::move(fAttributes),
                              fVertexAttributeCnt,
                              fInstanceAttributeCnt,
@@ -603,7 +607,7 @@ bool GrGLProgramBuilder::PrecompileProgram(GrGLPrecompiledProgram* precompiledPr
 
     SkTDArray<GrGLuint> shadersToDelete;
 
-    auto compileShader = [&](SkSL::Program::Kind kind, const SkSL::String& sksl, GrGLenum type) {
+    auto compileShader = [&](SkSL::ProgramKind kind, const SkSL::String& sksl, GrGLenum type) {
         SkSL::String glsl;
         auto program = GrSkSLtoGLSL(gpu, kind, sksl, settings, &glsl, errorHandler);
         if (!program) {
@@ -611,7 +615,8 @@ bool GrGLProgramBuilder::PrecompileProgram(GrGLPrecompiledProgram* precompiledPr
         }
 
         if (GrGLuint shaderID = GrGLCompileAndAttachShader(gpu->glContext(), programID, type, glsl,
-                                                           gpu->stats(), errorHandler)) {
+                                                           gpu->pipelineBuilder()->stats(),
+                                                           errorHandler)) {
             shadersToDelete.push_back(shaderID);
             return true;
         } else {
@@ -619,14 +624,14 @@ bool GrGLProgramBuilder::PrecompileProgram(GrGLPrecompiledProgram* precompiledPr
         }
     };
 
-    if (!compileShader(SkSL::Program::kFragment_Kind,
+    if (!compileShader(SkSL::ProgramKind::kFragment,
                        shaders[kFragment_GrShaderType],
                        GR_GL_FRAGMENT_SHADER) ||
-        !compileShader(SkSL::Program::kVertex_Kind,
+        !compileShader(SkSL::ProgramKind::kVertex,
                        shaders[kVertex_GrShaderType],
                        GR_GL_VERTEX_SHADER) ||
         (!shaders[kGeometry_GrShaderType].empty() &&
-         !compileShader(SkSL::Program::kGeometry_Kind,
+         !compileShader(SkSL::ProgramKind::kGeometry,
                        shaders[kGeometry_GrShaderType],
                        GR_GL_GEOMETRY_SHADER))) {
         cleanup_program(gpu, programID, shadersToDelete);

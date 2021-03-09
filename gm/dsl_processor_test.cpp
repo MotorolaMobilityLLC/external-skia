@@ -27,17 +27,22 @@ public:
     bool onIsEqual(const GrFragmentProcessor& that) const override { return this == &that; }
     std::unique_ptr<GrFragmentProcessor> clone() const override { return nullptr; }
 
-    GrGLSLFragmentProcessor* onCreateGLSLInstance() const override {
+    std::unique_ptr<GrGLSLFragmentProcessor> onMakeProgramImpl() const override {
         class Impl : public GrGLSLFragmentProcessor {
             void emitCode(EmitArgs& args) override {
                 using namespace SkSL::dsl;
                 StartFragmentProcessor(this, &args);
+
+                // Test for skbug.com/11384
+                Var x(kInt);
+                Declare(x, 1);
+                SkASSERT(DSLWriter::Var(x).initialValue()->description() == "1");
+
                 Var blueAlpha(kUniform_Modifier, kHalf2);
                 fBlueAlphaUniform = VarUniformHandle(blueAlpha);
                 Var coords(kFloat4);
-                args.fFragBuilder->codeAppend(Declare(coords, sk_FragCoord()));
-                args.fFragBuilder->codeAppend(Return(Half4(Swizzle(coords, X, Y) / 100,
-                                                           blueAlpha)));
+                Declare(coords, sk_FragCoord());
+                Return(Half4(Swizzle(coords, X, Y) / 100, blueAlpha));
                 EndFragmentProcessor();
             }
 
@@ -48,7 +53,7 @@ public:
 
             GrGLSLProgramDataManager::UniformHandle fBlueAlphaUniform;
         };
-        return new Impl;
+        return std::make_unique<Impl>();
     }
 };
 

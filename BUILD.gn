@@ -92,11 +92,8 @@ config("skia_private") {
   if (skia_use_vma) {
     defines += [ "SK_USE_VMA" ]
   }
-}
-
-config("skia_winuwp") {
   if (skia_enable_winuwp) {
-    defines = [ "SK_WINUWP" ]
+    defines += [ "SK_WINUWP" ]
   }
 }
 
@@ -254,7 +251,6 @@ template("optional") {
       if (defined(invoker.public_include_dirs)) {
         include_dirs = invoker.public_include_dirs
       }
-      configs = [ ":skia_winuwp" ]
     }
     source_set(target_name) {
       check_includes = false
@@ -262,6 +258,7 @@ template("optional") {
                              "*",
                              [
                                "public_defines",
+                               "sources_for_tests",
                                "sources_when_disabled",
                                "configs_to_remove",
                              ])
@@ -270,7 +267,31 @@ template("optional") {
       if (defined(invoker.configs_to_remove)) {
         configs -= invoker.configs_to_remove
       }
-      configs += [ ":skia_winuwp" ]
+    }
+    if (defined(invoker.sources_for_tests) && skia_enable_tools) {
+      source_set(target_name + "_tests") {
+        check_includes = false
+        forward_variables_from(invoker,
+                               "*",
+                               [
+                                 "public_defines",
+                                 "sources",
+                                 "sources_for_tests",
+                                 "sources_when_disabled",
+                                 "configs_to_remove",
+                               ])
+        testonly = true
+        sources = invoker.sources_for_tests
+        if (!defined(deps)) {
+          deps = []
+        }
+        deps += [ ":test" ]
+        all_dependent_configs = [ ":" + target_name + "_public" ]
+        configs += skia_library_configs
+        if (defined(invoker.configs_to_remove)) {
+          configs -= invoker.configs_to_remove
+        }
+      }
     }
   } else {
     source_set(target_name) {
@@ -284,6 +305,7 @@ template("optional") {
                                "libs",
                                "frameworks",
                                "sources",
+                               "sources_for_tests",
                                "sources_when_disabled",
                                "configs_to_remove",
                              ])
@@ -291,7 +313,10 @@ template("optional") {
         sources = invoker.sources_when_disabled
       }
       configs += skia_library_configs
-      configs += [ ":skia_winuwp" ]
+    }
+    if (defined(invoker.sources_for_tests)) {
+      source_set(target_name + "_tests") {
+      }
     }
   }
 }
@@ -333,6 +358,7 @@ optional("fontmgr_android") {
     "src/ports/SkFontMgr_android_parser.cpp",
     "src/ports/SkFontMgr_android_parser.h",
   ]
+  sources_for_tests = [ "tests/FontMgrAndroidParserTest.cpp" ]
 }
 optional("fontmgr_android_factory") {
   enabled = skia_enable_fontmgr_android
@@ -405,6 +431,7 @@ optional("fontmgr_fontconfig") {
   public = [ "include/ports/SkFontMgr_fontconfig.h" ]
   deps = [ ":typeface_freetype" ]
   sources = [ "src/ports/SkFontMgr_fontconfig.cpp" ]
+  sources_for_tests = [ "tests/FontMgrFontConfigTest.cpp" ]
 }
 optional("fontmgr_fontconfig_factory") {
   enabled = skia_enable_fontmgr_fontconfig
@@ -465,6 +492,7 @@ optional("fontmgr_mac_ct") {
     "src/ports/SkTypeface_mac_ct.cpp",
     "src/ports/SkTypeface_mac_ct.h",
   ]
+  sources_for_tests = [ "tests/TypefaceMacTest.cpp" ]
 
   if (is_mac) {
     frameworks = [
@@ -535,8 +563,7 @@ if (skia_lex) {
     # GN insists its outputs should go somewhere underneath target_out_dir, so we trick it with a
     # path that starts with target_out_dir and then uses ".." to back up into the src dir.
     outputs = [
-      "$target_out_dir/" +
-          rebase_path("src/sksl/lex/SkSLLexer.h", target_out_dir),
+      "$target_out_dir/" + rebase_path("src/sksl/SkSLLexer.h", target_out_dir),
       # the script also modifies the corresponding .cpp file, but if we tell GN that it gets
       # confused due to the same file being named by two different paths
     ]
@@ -562,6 +589,7 @@ if (skia_compile_processors || skia_compile_sksl_tests) {
   executable("skslc") {
     defines = [
       "SKSL_STANDALONE",
+      "SK_DISABLE_TRACING",
       "SK_ENABLE_SPIRV_VALIDATION",
     ]
     sources = [
@@ -855,19 +883,28 @@ optional("gpu") {
   if (skia_use_gl) {
     public_defines += [ "SK_GL" ]
     if (is_android) {
-      sources += [ "src/gpu/gl/egl/GrGLMakeNativeInterface_egl.cpp" ]
+      sources += [
+        "src/gpu/gl/egl/GrGLMakeEGLInterface.cpp",
+        "src/gpu/gl/egl/GrGLMakeNativeInterface_egl.cpp",
+      ]
 
       # this lib is required to link against AHardwareBuffer
       if (defined(ndk_api) && ndk_api >= 26) {
         libs += [ "android" ]
       }
     } else if (skia_use_egl) {
-      sources += [ "src/gpu/gl/egl/GrGLMakeNativeInterface_egl.cpp" ]
+      sources += [
+        "src/gpu/gl/egl/GrGLMakeEGLInterface.cpp",
+        "src/gpu/gl/egl/GrGLMakeNativeInterface_egl.cpp",
+      ]
       libs += [ "EGL" ]
     } else if (skia_use_webgl) {
       sources += [ "src/gpu/gl/webgl/GrGLMakeNativeInterface_webgl.cpp" ]
     } else if (is_linux && skia_use_x11) {
-      sources += [ "src/gpu/gl/glx/GrGLMakeNativeInterface_glx.cpp" ]
+      sources += [
+        "src/gpu/gl/glx/GrGLMakeGLXInterface.cpp",
+        "src/gpu/gl/glx/GrGLMakeNativeInterface_glx.cpp",
+      ]
       libs += [ "GL" ]
     } else if (is_mac) {
       sources += [ "src/gpu/gl/mac/GrGLMakeNativeInterface_mac.cpp" ]
@@ -1754,8 +1791,6 @@ if (skia_enable_tools) {
       libs +=
           [ "${fuchsia_sdk_path}/arch/${target_cpu}/sysroot/lib/libzircon.so" ]
     }
-
-    cflags_objcc = [ "-fobjc-arc" ]
   }  # test_lib("gpu_tool_utils")
 
   test_lib("flags") {
@@ -1905,6 +1940,23 @@ if (skia_enable_tools) {
     }
   }
 
+  test_lib("test") {
+    sources = [
+      "tests/Test.cpp",
+      "tests/Test.h",
+      "tests/TestUtils.cpp",
+      "tests/TestUtils.h",
+    ]
+    deps = [
+      ":flags",
+      ":skia",
+      ":tool_utils",
+    ]
+    public_deps = [
+      ":gpu_tool_utils",  # Test.h #includes headers from this target.
+    ]
+  }
+
   import("gn/tests.gni")
   test_lib("tests") {
     sources = tests_sources + pathops_tests_sources
@@ -1917,15 +1969,13 @@ if (skia_enable_tools) {
     if (skia_use_gl) {
       sources += gl_tests_sources
     }
-    if (!skia_enable_fontmgr_android) {
-      sources -= [ "//tests/FontMgrAndroidParserTest.cpp" ]
-    }
-    if (!skia_enable_fontmgr_fontconfig) {
-      sources -= [ "//tests/FontMgrFontConfigTest.cpp" ]
-    }
     deps = [
       ":flags",
+      ":fontmgr_android_tests",
+      ":fontmgr_fontconfig_tests",
+      ":fontmgr_mac_ct_tests",
       ":skia",
+      ":test",
       ":tool_utils",
       "experimental/skrive:tests",
       "modules/skottie:tests",
@@ -1936,9 +1986,6 @@ if (skia_enable_tools) {
       "//third_party/libpng",
       "//third_party/libwebp",
       "//third_party/zlib",
-    ]
-    public_deps = [
-      ":gpu_tool_utils",  # Test.h #includes headers from this target.
     ]
   }
 
@@ -2065,6 +2112,14 @@ if (skia_enable_tools) {
         "modules/skottie",
         "modules/skottie:utils",
         "modules/svg",
+      ]
+    }
+    test_app("ddlbench") {
+      sources = [ "experimental/ddlbench/ddlbench.cpp" ]
+      deps = [
+        ":flags",
+        ":skia",
+        ":tool_utils",
       ]
     }
 
@@ -2222,6 +2277,7 @@ if (skia_enable_tools) {
       "fuzz/FuzzCommon.cpp",
       "fuzz/FuzzCommon.h",
       "fuzz/FuzzCreateDDL.cpp",
+      "fuzz/FuzzDDLThreading.cpp",
       "fuzz/FuzzDrawFunctions.cpp",
       "fuzz/FuzzEncoders.cpp",
       "fuzz/FuzzGradients.cpp",
@@ -2890,6 +2946,14 @@ if (skia_enable_tools) {
       sources = [
         "fuzz/FuzzDrawFunctions.cpp",
         "fuzz/oss_fuzz/FuzzDrawFunctions.cpp",
+      ]
+      deps = []
+    }
+
+    libfuzzer_app("api_ddl_threading") {
+      sources = [
+        "fuzz/FuzzDDLThreading.cpp",
+        "fuzz/oss_fuzz/FuzzDDLThreading.cpp",
       ]
       deps = []
     }

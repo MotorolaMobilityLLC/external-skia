@@ -34,6 +34,9 @@ public:
 
     void disconnect(DisconnectType) override;
 
+    GrThreadSafePipelineBuilder* pipelineBuilder() override;
+    sk_sp<GrThreadSafePipelineBuilder> refPipelineBuilder() override;
+
     GrStagingBufferManager* stagingBufferManager() override { return &fStagingBufferManager; }
     void takeOwnershipOfBuffer(sk_sp<GrGpuBuffer>) override;
 
@@ -99,7 +102,7 @@ public:
     void appendCommandBuffer(wgpu::CommandBuffer commandBuffer);
 
     void waitOnAllBusyStagingBuffers();
-    SkSL::String SkSLToSPIRV(const char* shaderString, SkSL::Program::Kind, bool flipY,
+    SkSL::String SkSLToSPIRV(const char* shaderString, SkSL::ProgramKind, bool flipY,
                              uint32_t rtHeightOffset, SkSL::Program::Inputs*);
     wgpu::ShaderModule createShaderModule(const SkSL::String& spirvSource);
 
