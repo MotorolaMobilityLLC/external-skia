@@ -67,7 +67,7 @@
 #include "src/gpu/ops/GrStencilPathOp.h"
 #include "src/gpu/ops/GrStrokeRectOp.h"
 #include "src/gpu/ops/GrTextureOp.h"
-#include "src/gpu/text/GrSDFTOptions.h"
+#include "src/gpu/text/GrSDFTControl.h"
 #include "src/gpu/text/GrTextBlobCache.h"
 
 #define ASSERT_OWNED_RESOURCE(R) SkASSERT(!(R) || (R)->getContext() == this->drawingManager()->getContext())
@@ -324,31 +324,76 @@ GrMipmapped GrSurfaceDrawContext::mipmapped() const {
     return GrMipmapped::kNo;
 }
 
-static SkColor compute_canonical_color(const SkPaint& paint, bool lcd) {
-    SkColor canonicalColor = SkPaintPriv::ComputeLuminanceColor(paint);
-    if (lcd) {
-        // This is the correct computation for canonicalColor, but there are tons of cases where LCD
-        // can be modified. For now we just regenerate if any run in a textblob has LCD.
-        // TODO figure out where all of these modifications are and see if we can incorporate that
-        //      logic at a higher level *OR* use sRGB
-        //canonicalColor = SkMaskGamma::CanonicalColor(canonicalColor);
+void GrSurfaceDrawContext::drawGlyphRunListNoCache(const GrClip* clip,
+                                                   const SkMatrixProvider& viewMatrix,
+                                                   const SkGlyphRunList& glyphRunList) {
+    GrSDFTControl control =
+            fContext->priv().getSDFTControl(fSurfaceProps.isUseDeviceIndependentFonts());
+    const SkPoint drawOrigin = glyphRunList.origin();
+    SkMatrix drawMatrix = viewMatrix.localToDevice();
+    drawMatrix.preTranslate(drawOrigin.x(), drawOrigin.y());
+    GrSubRunAllocator* const alloc = this->recordingContext()->priv().recordTimeSubRunAllocator();
 
-        // TODO we want to figure out a way to be able to use the canonical color on LCD text,
-        // see the note above.  We pick a dummy value for LCD text to ensure we always match the
-        // same key
-        return SK_ColorTRANSPARENT;
-    } else {
-        // A8, though can have mixed BMP text but it shouldn't matter because BMP text won't have
-        // gamma corrected masks anyways, nor color
-        U8CPU lum = SkComputeLuminance(SkColorGetR(canonicalColor),
-                                       SkColorGetG(canonicalColor),
-                                       SkColorGetB(canonicalColor));
-        // reduce to our finite number of bits
-        canonicalColor = SkMaskGamma::CanonicalColor(SkColorSetRGB(lum, lum, lum));
+    for (auto& glyphRun : glyphRunList) {
+        GrSubRunNoCachePainter painter{this, alloc, clip, viewMatrix, glyphRunList};
+
+        // Make and add the text ops.
+        fGlyphPainter.processGlyphRun(glyphRun,
+                                      drawMatrix,
+                                      glyphRunList.paint(),
+                                      control,
+                                      &painter);
     }
-    return canonicalColor;
 }
 
+void GrSurfaceDrawContext::drawGlyphRunListWithCache(const GrClip* clip,
+                                                     const SkMatrixProvider& viewMatrix,
+                                                     const SkGlyphRunList& glyphRunList) {
+    SkMatrix drawMatrix(viewMatrix.localToDevice());
+    drawMatrix.preTranslate(glyphRunList.origin().x(), glyphRunList.origin().y());
+
+    GrSDFTControl control =
+            this->recordingContext()->priv().getSDFTControl(
+                    this->surfaceProps().isUseDeviceIndependentFonts());
+
+    auto [canCache, key] = GrTextBlob::Key::Make(glyphRunList,
+                                                 fSurfaceProps,
+                                                 this->colorInfo(),
+                                                 drawMatrix,
+                                                 control);
+
+    sk_sp<GrTextBlob> blob;
+    GrTextBlobCache* textBlobCache = fContext->priv().getTextBlobCache();
+    if (canCache) {
+        blob = textBlobCache->find(key);
+    }
+
+    if (blob == nullptr || !blob->canReuse(glyphRunList.paint(), drawMatrix)) {
+        if (blob != nullptr) {
+            SkASSERT(!drawMatrix.hasPerspective());
+            // We have to remake the blob because changes may invalidate our masks.
+            // TODO we could probably get away with reuse most of the time if the pointer is unique,
+            //      but we'd have to clear the SubRun information
+            textBlobCache->remove(blob.get());
+        }
+
+        blob = GrTextBlob::Make(glyphRunList, drawMatrix, control, &fGlyphPainter);
+
+        if (canCache) {
+            blob->addKey(key);
+            // The blob may already have been created on a different thread. Use the first one
+            // that was there.
+            blob = textBlobCache->addOrReturnExisting(glyphRunList, blob);
+        }
+    }
+
+    for (const GrSubRun& subRun : blob->subRunList()) {
+        subRun.draw(clip, viewMatrix, glyphRunList, this);
+    }
+}
+
+// choose to use the GrTextBlob cache or not.
+bool gGrDrawTextNoCache = false;
 void GrSurfaceDrawContext::drawGlyphRunList(const GrClip* clip,
                                             const SkMatrixProvider& viewMatrix,
                                             const SkGlyphRunList& glyphRunList) {
@@ -364,107 +409,11 @@ void GrSurfaceDrawContext::drawGlyphRunList(const GrClip* clip,
         return;
     }
 
-    GrSDFTOptions options =
-            this->recordingContext()->priv().getSDFTOptions(
-                    this->surfaceProps().isUseDeviceIndependentFonts());
-
-    GrTextBlobCache* textBlobCache = fContext->priv().getTextBlobCache();
-
-    // Get the first paint to use as the key paint.
-    const SkPaint& drawPaint = glyphRunList.paint();
-
-    SkMaskFilterBase::BlurRec blurRec;
-    // It might be worth caching these things, but its not clear at this time
-    // TODO for animated mask filters, this will fill up our cache.  We need a safeguard here
-    const SkMaskFilter* mf = drawPaint.getMaskFilter();
-    bool canCache = glyphRunList.canCache() &&
-            !(drawPaint.getPathEffect() || (mf && !as_MFB(mf)->asABlur(&blurRec)));
-
-    // If we're doing linear blending, then we can disable the gamma hacks.
-    // Otherwise, leave them on. In either case, we still want the contrast boost:
-    // TODO: Can we be even smarter about mask gamma based on the dest transfer function?
-    SkScalerContextFlags scalerContextFlags = this->colorInfo().isLinearlyBlended()
-                                              ? SkScalerContextFlags::kBoostContrast
-                                              : SkScalerContextFlags::kFakeGammaAndBoostContrast;
-    SkMatrix drawMatrix(viewMatrix.localToDevice());
-    SkPoint drawOrigin = glyphRunList.origin();
-    drawMatrix.preTranslate(drawOrigin.x(), drawOrigin.y());
-
-    sk_sp<GrTextBlob> blob;
-    GrTextBlob::Key key;
-    if (canCache) {
-        bool hasLCD = glyphRunList.anyRunsLCD();
-
-        // We canonicalize all non-lcd draws to use kUnknown_SkPixelGeometry
-        SkPixelGeometry pixelGeometry =
-                hasLCD ? fSurfaceProps.pixelGeometry() : kUnknown_SkPixelGeometry;
-
-        GrColor canonicalColor = compute_canonical_color(drawPaint, hasLCD);
-
-        key.fPixelGeometry = pixelGeometry;
-        key.fUniqueID = glyphRunList.uniqueID();
-        key.fStyle = drawPaint.getStyle();
-        if (key.fStyle != SkPaint::kFill_Style) {
-            key.fFrameWidth = drawPaint.getStrokeWidth();
-            key.fMiterLimit = drawPaint.getStrokeMiter();
-            key.fJoin = drawPaint.getStrokeJoin();
-        }
-        key.fHasBlur = SkToBool(mf);
-        if (key.fHasBlur) {
-            key.fBlurRec = blurRec;
-        }
-        key.fCanonicalColor = canonicalColor;
-        key.fScalerContextFlags = scalerContextFlags;
-
-        // Calculate the set of drawing types.
-        key.fSetOfDrawingTypes = 0;
-        for (auto& run : glyphRunList) {
-            key.fSetOfDrawingTypes |= options.drawingType(run.font(), drawPaint, drawMatrix);
-        }
-
-        if (key.fSetOfDrawingTypes & GrSDFTOptions::kDirect) {
-            // Store the fractional offset of the position. We know that the matrix can't be
-            // perspective at this point.
-            SkPoint mappedOrigin = drawMatrix.mapOrigin();
-            key.fDrawMatrix = drawMatrix;
-            key.fDrawMatrix.setTranslateX(
-                    mappedOrigin.x() - SkScalarFloorToScalar(mappedOrigin.x()));
-            key.fDrawMatrix.setTranslateY(
-                    mappedOrigin.y() - SkScalarFloorToScalar(mappedOrigin.y()));
-        } else {
-            // For path and SDFT, the matrix doesn't matter.
-            key.fDrawMatrix = SkMatrix::I();
-        }
-
-        blob = textBlobCache->find(key);
-    }
-
-    if (blob == nullptr || !blob->canReuse(drawPaint, drawMatrix)) {
-        if (blob != nullptr) {
-            SkASSERT(!drawMatrix.hasPerspective());
-            // We have to remake the blob because changes may invalidate our masks.
-            // TODO we could probably get away with reuse most of the time if the pointer is unique,
-            //      but we'd have to clear the SubRun information
-            textBlobCache->remove(blob.get());
-        }
-
-        blob = GrTextBlob::Make(glyphRunList, drawMatrix);
-        blob->makeSubRuns(&fGlyphPainter,
-                          glyphRunList,
-                          drawMatrix,
-                          drawPaint,
-                          options);
-
-        if (canCache) {
-            blob->addKey(key);
-            // The blob may already have been created on a different thread. Use the first one
-            // that was there.
-            blob = textBlobCache->addOrReturnExisting(glyphRunList, blob);
-        }
-    }
-
-    for (const GrSubRun& subRun : blob->subRunList()) {
-        subRun.draw(clip, viewMatrix, glyphRunList, this);
+    if (gGrDrawTextNoCache) {
+        // drawGlyphRunListNoCache lives in GrTextBlob.cpp to share sub run implementation code.
+        this->drawGlyphRunListNoCache(clip, viewMatrix, glyphRunList);
+    } else {
+        this->drawGlyphRunListWithCache(clip, viewMatrix, glyphRunList);
     }
 }
 
@@ -473,10 +422,10 @@ void GrSurfaceDrawContext::drawPaint(const GrClip* clip,
                                      const SkMatrix& viewMatrix) {
     // Start with the render target, since that is the maximum content we could possibly fill.
     // drawFilledQuad() will automatically restrict it to clip bounds for us if possible.
-    SkRect r = this->asSurfaceProxy()->getBoundsRect();
     if (!paint.numTotalFragmentProcessors()) {
         // The paint is trivial so we won't need to use local coordinates, so skip calculating the
         // inverse view matrix.
+        SkRect r = this->asSurfaceProxy()->getBoundsRect();
         this->fillRectToRect(clip, std::move(paint), GrAA::kNo, SkMatrix::I(), r, r);
     } else {
         // Use the inverse view matrix to arrive at appropriate local coordinates for the paint.
@@ -484,8 +433,8 @@ void GrSurfaceDrawContext::drawPaint(const GrClip* clip,
         if (!viewMatrix.invert(&localMatrix)) {
             return;
         }
-        this->fillRectWithLocalMatrix(clip, std::move(paint), GrAA::kNo, SkMatrix::I(), r,
-                                      localMatrix);
+        SkIRect bounds = SkIRect::MakeSize(this->asSurfaceProxy()->dimensions());
+        this->fillPixelsWithLocalMatrix(clip, std::move(paint), bounds, localMatrix);
     }
 }
 
@@ -832,6 +781,43 @@ void GrSurfaceDrawContext::internalStencilClear(const SkIRect* scissor, bool ins
     }
 }
 
+bool GrSurfaceDrawContext::stencilPath(const GrHardClip* clip,
+                                       GrAA doStencilMSAA,
+                                       const SkMatrix& viewMatrix,
+                                       const SkPath& path) {
+    SkIRect clipBounds = clip ? clip->getConservativeBounds()
+                              : SkIRect::MakeSize(this->dimensions());
+    GrStyledShape shape(path, GrStyledShape::DoSimplify::kNo);
+
+    GrPathRenderer::CanDrawPathArgs canDrawArgs;
+    canDrawArgs.fCaps = fContext->priv().caps();
+    canDrawArgs.fProxy = this->asRenderTargetProxy();
+    canDrawArgs.fClipConservativeBounds = &clipBounds;
+    canDrawArgs.fViewMatrix = &viewMatrix;
+    canDrawArgs.fShape = &shape;
+    canDrawArgs.fPaint = nullptr;
+    canDrawArgs.fAAType = (doStencilMSAA == GrAA::kYes) ? GrAAType::kMSAA : GrAAType::kNone;
+    canDrawArgs.fHasUserStencilSettings = false;
+    canDrawArgs.fTargetIsWrappedVkSecondaryCB = this->wrapsVkSecondaryCB();
+    GrPathRenderer* pr = this->drawingManager()->getPathRenderer(
+            canDrawArgs, false, GrPathRendererChain::DrawType::kStencil);
+    if (!pr) {
+        SkDebugf("WARNING: No path renderer to stencil path.\n");
+        return false;
+    }
+
+    GrPathRenderer::StencilPathArgs args;
+    args.fContext = fContext;
+    args.fRenderTargetContext = this;
+    args.fClip = clip;
+    args.fClipConservativeBounds = &clipBounds;
+    args.fViewMatrix = &viewMatrix;
+    args.fShape = &shape;
+    args.fDoStencilMSAA = doStencilMSAA;
+    pr->stencilPath(args);
+    return true;
+}
+
 void GrSurfaceDrawContext::stencilPath(const GrHardClip* clip,
                                        GrAA doStencilMSAA,
                                        const SkMatrix& viewMatrix,
@@ -1023,7 +1009,8 @@ void GrSurfaceDrawContext::drawRRect(const GrClip* origClip,
     }
     if (!op && style.isSimpleFill()) {
         assert_alive(paint);
-        op = GrFillRRectOp::Make(fContext, std::move(paint), viewMatrix, rrect, aaType);
+        op = GrFillRRectOp::Make(fContext, std::move(paint), viewMatrix, rrect,
+                                 GrAA(aaType != GrAAType::kNone));
     }
     if (!op && GrAAType::kCoverage == aaType) {
         assert_alive(paint);
@@ -1063,9 +1050,9 @@ bool GrSurfaceDrawContext::drawFastShadow(const GrClip* clip,
 
     SkRRect rrect;
     SkRect rect;
-    // we can only handle rects, circles, and rrects with circular corners
-    bool isRRect = path.isRRect(&rrect) && SkRRectPriv::IsSimpleCircular(rrect) &&
-        rrect.radii(SkRRect::kUpperLeft_Corner).fX > SK_ScalarNearlyZero;
+    // we can only handle rects, circles, and simple rrects with circular corners
+    bool isRRect = path.isRRect(&rrect) && SkRRectPriv::IsNearlySimpleCircular(rrect) &&
+                   rrect.getSimpleRadii().fX > SK_ScalarNearlyZero;
     if (!isRRect &&
         path.isOval(&rect) && SkScalarNearlyEqual(rect.width(), rect.height()) &&
         rect.width() > SK_ScalarNearlyZero) {
@@ -1175,7 +1162,7 @@ bool GrSurfaceDrawContext::drawFastShadow(const GrClip* clip,
         SkMatrix shadowTransform;
         shadowTransform.setScaleTranslate(spotScale, spotScale, spotOffset.fX, spotOffset.fY);
         rrect.transform(shadowTransform, &spotShadowRRect);
-        SkScalar spotRadius = SkRRectPriv::GetSimpleRadii(spotShadowRRect).fX;
+        SkScalar spotRadius = spotShadowRRect.getSimpleRadii().fX;
 
         // Compute the insetWidth
         SkScalar blurOutset = srcSpaceSpotBlur;
@@ -1218,7 +1205,7 @@ bool GrSurfaceDrawContext::drawFastShadow(const GrClip* clip,
                                                          spotShadowRRect.rect().fBottom -
                                                          rrect.rect().fBottom - dr);
                 maxOffset = SkScalarSqrt(std::max(SkPointPriv::LengthSqd(upperLeftOffset),
-                                                SkPointPriv::LengthSqd(lowerRightOffset))) + dr;
+                                                  SkPointPriv::LengthSqd(lowerRightOffset))) + dr;
             }
             insetWidth += std::max(blurOutset, maxOffset);
         }
@@ -1246,126 +1233,6 @@ bool GrSurfaceDrawContext::drawFastShadow(const GrClip* clip,
     }
 
     return true;
-}
-
-///////////////////////////////////////////////////////////////////////////////
-
-bool GrSurfaceDrawContext::drawFilledDRRect(const GrClip* clip,
-                                            GrPaint&& paint,
-                                            GrAA aa,
-                                            const SkMatrix& viewMatrix,
-                                            const SkRRect& origOuter,
-                                            const SkRRect& origInner) {
-    SkASSERT(!origInner.isEmpty());
-    SkASSERT(!origOuter.isEmpty());
-
-    SkTCopyOnFirstWrite<SkRRect> inner(origInner), outer(origOuter);
-
-    GrAAType aaType = this->chooseAAType(aa);
-
-    if (GrAAType::kMSAA == aaType) {
-        return false;
-    }
-
-    if (GrAAType::kCoverage == aaType && SkRRectPriv::IsCircle(*inner)
-                                      && SkRRectPriv::IsCircle(*outer)) {
-        auto outerR = outer->width() / 2.f;
-        auto innerR = inner->width() / 2.f;
-        auto cx = outer->getBounds().fLeft + outerR;
-        auto cy = outer->getBounds().fTop + outerR;
-        if (SkScalarNearlyEqual(cx, inner->getBounds().fLeft + innerR) &&
-            SkScalarNearlyEqual(cy, inner->getBounds().fTop + innerR)) {
-            auto avgR = (innerR + outerR) / 2.f;
-            auto circleBounds = SkRect::MakeLTRB(cx - avgR, cy - avgR, cx + avgR, cy + avgR);
-            SkStrokeRec stroke(SkStrokeRec::kFill_InitStyle);
-            stroke.setStrokeStyle(outerR - innerR);
-            auto op = GrOvalOpFactory::MakeOvalOp(fContext, std::move(paint), viewMatrix,
-                                                  circleBounds, GrStyle(stroke, nullptr),
-                                                  this->caps()->shaderCaps());
-            if (op) {
-                this->addDrawOp(clip, std::move(op));
-                return true;
-            }
-            assert_alive(paint);
-        }
-    }
-
-    GrClipEdgeType innerEdgeType, outerEdgeType;
-    if (GrAAType::kCoverage == aaType) {
-        innerEdgeType = GrClipEdgeType::kInverseFillAA;
-        outerEdgeType = GrClipEdgeType::kFillAA;
-    } else {
-        innerEdgeType = GrClipEdgeType::kInverseFillBW;
-        outerEdgeType = GrClipEdgeType::kFillBW;
-    }
-
-    SkMatrix inverseVM;
-    if (!viewMatrix.isIdentity()) {
-        if (!origInner.transform(viewMatrix, inner.writable())) {
-            return false;
-        }
-        if (!origOuter.transform(viewMatrix, outer.writable())) {
-            return false;
-        }
-        if (!viewMatrix.invert(&inverseVM)) {
-            return false;
-        }
-    } else {
-        inverseVM.reset();
-    }
-
-    const auto& caps = *this->caps()->shaderCaps();
-    // TODO these need to be a geometry processors
-    auto [success, fp] = GrRRectEffect::Make(/*inputFP=*/nullptr, innerEdgeType, *inner, caps);
-    if (!success) {
-        return false;
-    }
-
-    std::tie(success, fp) = GrRRectEffect::Make(std::move(fp), outerEdgeType, *outer, caps);
-    if (!success) {
-        return false;
-    }
-
-    paint.setCoverageFragmentProcessor(std::move(fp));
-
-    SkRect bounds = outer->getBounds();
-    if (GrAAType::kCoverage == aaType) {
-        bounds.outset(SK_ScalarHalf, SK_ScalarHalf);
-    }
-
-    this->fillRectWithLocalMatrix(clip, std::move(paint), GrAA::kNo, SkMatrix::I(), bounds,
-                                  inverseVM);
-    return true;
-}
-
-void GrSurfaceDrawContext::drawDRRect(const GrClip* clip,
-                                      GrPaint&& paint,
-                                      GrAA aa,
-                                      const SkMatrix& viewMatrix,
-                                      const SkRRect& outer,
-                                      const SkRRect& inner) {
-    ASSERT_SINGLE_OWNER
-    RETURN_IF_ABANDONED
-    SkDEBUGCODE(this->validate();)
-    GR_CREATE_TRACE_MARKER_CONTEXT("GrSurfaceDrawContext", "drawDRRect", fContext);
-
-    SkASSERT(!outer.isEmpty());
-    SkASSERT(!inner.isEmpty());
-
-    AutoCheckFlush acf(this->drawingManager());
-
-    if (this->drawFilledDRRect(clip, std::move(paint), aa, viewMatrix, outer, inner)) {
-        return;
-    }
-    assert_alive(paint);
-
-    SkPath path;
-    path.setIsVolatile(true);
-    path.addRRect(inner);
-    path.addRRect(outer);
-    path.setFillType(SkPathFillType::kEvenOdd);
-    this->drawShapeUsingPathRenderer(clip, std::move(paint), aa, viewMatrix,
-                                     GrStyledShape(path, DoSimplify::kNo));
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -1449,7 +1316,7 @@ void GrSurfaceDrawContext::drawOval(const GrClip* clip,
         // ovals the exact same way we do round rects.
         assert_alive(paint);
         op = GrFillRRectOp::Make(fContext, std::move(paint), viewMatrix, SkRRect::MakeOval(oval),
-                                 aaType);
+                                 GrAA(aaType != GrAAType::kNone));
     }
     if (!op && GrAAType::kCoverage == aaType) {
         assert_alive(paint);

@@ -45,6 +45,7 @@ public:
 
         GrGLSLFPFragmentBuilder* fragBuilder = args.fFragBuilder;
         // Setup pass through color
+        fragBuilder->codeAppendf("half4 %s;", args.fOutputColor);
         if (btgp.hasVertexColor()) {
             varyingHandler->addPassThroughAttribute(btgp.inColor(), args.fOutputColor);
         } else {
@@ -64,9 +65,9 @@ public:
         if (btgp.maskFormat() == kARGB_GrMaskFormat) {
             // modulate by color
             fragBuilder->codeAppendf("%s = %s * texColor;", args.fOutputColor, args.fOutputColor);
-            fragBuilder->codeAppendf("%s = half4(1);", args.fOutputCoverage);
+            fragBuilder->codeAppendf("const half4 %s = half4(1);", args.fOutputCoverage);
         } else {
-            fragBuilder->codeAppendf("%s = texColor;", args.fOutputCoverage);
+            fragBuilder->codeAppendf("half4 %s = texColor;", args.fOutputCoverage);
         }
     }
 
@@ -94,12 +95,11 @@ public:
                               const GrShaderCaps&,
                               GrProcessorKeyBuilder* b) {
         const GrBitmapTextGeoProc& btgp = proc.cast<GrBitmapTextGeoProc>();
-        uint32_t key = 0;
-        key |= btgp.usesW() ? 0x1 : 0x0;
-        key |= btgp.maskFormat() << 1;
-        key |= ComputeMatrixKey(btgp.localMatrix()) << 2;
-        b->add32(key);
-        b->add32(btgp.numTextureSamplers());
+        b->addBool(btgp.usesW(), "usesW");
+        static_assert(kLast_GrMaskFormat < (1u << 2));
+        b->addBits(2, btgp.maskFormat(), "maskFormat");
+        b->addBits(kMatrixKeyBits, ComputeMatrixKey(btgp.localMatrix()), "localMatrixType");
+        b->add32(btgp.numTextureSamplers(),"numTextures");
     }
 
 private:

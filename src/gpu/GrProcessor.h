@@ -21,44 +21,6 @@
 
 class GrResourceProvider;
 
-/**
- * Used by processors to build their keys. It incorporates each per-processor key into a larger
- * shader key.
- */
-class GrProcessorKeyBuilder {
-public:
-    GrProcessorKeyBuilder(GrKeyBuilder* key) : fKey(key) {
-        SkASSERT(0 == fKey->size() % sizeof(uint32_t));
-    }
-
-    // Introduces a word-boundary in the underlying key. Must be called before using the key with
-    // any cache, but can be called elsewhere to create a clean break between generic data and
-    // backend-specific data.
-    void flush() { fKey->flush(); }
-
-    void addBits(uint32_t numBits, uint32_t val, const char* label) {
-        fKey->addBits(numBits, val, label);
-    }
-
-    void addBytes(uint32_t numBytes, const void* data, const char* label) {
-        fKey->addBytes(numBytes, data, label);
-    }
-
-    void add32(uint32_t v, const char* label = "unknown") {
-        this->addBits(32, v, label);
-    }
-
-    template <typename StringFunc>
-    void addString(StringFunc&& sf) {
-        fKey->addString(std::move(sf));
-    }
-
-    size_t sizeInBits() const { return fKey->sizeInBits(); }
-
-private:
-    GrKeyBuilder* fKey;    // unowned ptr to the larger key.
-};
-
 /** Provides custom shader code to the Ganesh shading pipeline. GrProcessor objects *must* be
     immutable: after being constructed, their fields may not change.
 
@@ -121,7 +83,6 @@ public:
         kGrEllipseEffect_ClassID,
         kGrFillRRectOp_Processor_ClassID,
         kGrGaussianConvolutionFragmentProcessor_ClassID,
-        kGrGSCoverageProcessor_ClassID,
         kGrHighContrastFilterEffect_ClassID,
         kGrHSLToRGBFilterEffect_ClassID,
         kGrImprovedPerlinNoiseEffect_ClassID,
@@ -151,7 +112,6 @@ public:
         kGrTiledGradientEffect_ClassID,
         kGrTwoPointConicalGradientLayout_ClassID,
         kGrUnrolledBinaryGradientColorizer_ClassID,
-        kGrVSCoverageProcessor_ClassID,
         kGrYUVtoRGBEffect_ClassID,
         kHighContrastFilterEffect_ClassID,
         kLatticeGP_ClassID,

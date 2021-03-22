@@ -623,8 +623,8 @@ if (skia_compile_processors || skia_compile_sksl_tests) {
     include_dirs = [ "." ]
     deps = [
       ":run_sksllex",
-      "//third_party/spirv-tools:spvtools",
-      "//third_party/spirv-tools:spvtools_val",
+      "//third_party/externals/spirv-tools:spvtools",
+      "//third_party/externals/spirv-tools:spvtools_val",
     ]
   }
 
@@ -1399,7 +1399,7 @@ component("skia") {
   }
 
   if (skia_enable_spirv_validation) {
-    deps += [ "//third_party/spirv-tools:spvtools_val" ]
+    deps += [ "//third_party/externals/spirv-tools:spvtools_val" ]
     defines += [ "SK_ENABLE_SPIRV_VALIDATION" ]
   }
 
@@ -1497,6 +1497,7 @@ group("modules") {
     "modules/skottie",
     "modules/skparagraph",
     "modules/skshaper",
+    "modules/svg",
   ]
 }
 
@@ -2029,9 +2030,6 @@ if (skia_enable_tools) {
   import("gn/samples.gni")
   test_lib("samples") {
     sources = samples_sources
-    if (skia_enable_ccpr) {
-      sources += samples_sources_ccpr
-    }
     public_deps = [ ":tool_utils" ]
     deps = [
       ":flags",
@@ -2698,11 +2696,10 @@ if (skia_enable_tools) {
       }
       if (skia_use_vulkan) {
         deps += [
-          "//third_party/spirv-tools:spvtools",
+          "//third_party/externals/spirv-tools:spvtools",
 
-          #spvtools depends on this but doesn't deps it in. Looks like upstream bug
-          #that we replicated in our third_party/spirv-tools/BUILD.gn
-          "//third_party/spirv-tools:spvtools_val",
+          #spvtools depends on this but doesn't deps it in.
+          "//third_party/externals/spirv-tools:spvtools_val",
         ]
       }
     }

@@ -8,9 +8,9 @@
 #ifndef SKSL_VARIABLE
 #define SKSL_VARIABLE
 
+#include "include/private/SkSLModifiers.h"
+#include "include/private/SkSLSymbol.h"
 #include "src/sksl/SkSLPosition.h"
-#include "src/sksl/ir/SkSLModifiers.h"
-#include "src/sksl/ir/SkSLSymbol.h"
 #include "src/sksl/ir/SkSLType.h"
 #include "src/sksl/ir/SkSLVariableReference.h"
 

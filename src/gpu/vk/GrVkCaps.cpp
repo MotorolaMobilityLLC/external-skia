@@ -443,12 +443,6 @@ void GrVkCaps::init(const GrContextOptions& contextOptions, const GrVkInterface*
         SkASSERT(fMaxDrawIndirectDrawCount == 1 || features.features.multiDrawIndirect);
     }
 
-    if (kARM_VkVendor == properties.vendorID) {
-        // ARM seems to do better with more fine triangles as opposed to using the sample mask.
-        // (At least in our current round rect op.)
-        fPreferTrianglesOverSampleMask = true;
-    }
-
 #ifdef SK_BUILD_FOR_UNIX
     if (kNvidia_VkVendor == properties.vendorID) {
         // On nvidia linux we see a big perf regression when not using dedicated image allocations.
@@ -562,18 +556,18 @@ void GrVkCaps::applyDriverCorrectnessWorkarounds(const VkPhysicalDevicePropertie
     // GrCaps workarounds
     ////////////////////////////////////////////////////////////////////////////
 
-    // The GTX660 bot experiences crashes and incorrect rendering with MSAA CCPR. Block this path
-    // renderer on non-mixed-sampled NVIDIA.
+    // The GTX660 bot was experiencing crashes and incorrect rendering with MSAA CCPR. Block this
+    // path renderer on non-mixed-sampled NVIDIA.
     // NOTE: We may lose mixed samples support later if the context options suppress dual source
     // blending, but that shouldn't be an issue because MSAA CCPR seems to work fine (even without
     // mixed samples) on later NVIDIA hardware where mixed samples would be supported.
     if ((kNvidia_VkVendor == properties.vendorID) && !fMixedSamplesSupport) {
-        fDriverDisableMSAACCPR = true;
+        fDriverDisableMSAAClipAtlas = true;
     }
 
 #ifdef SK_BUILD_FOR_ANDROID
-    // MSAA CCPR is slow on Android. http://skbug.com/9676
-    fDriverDisableMSAACCPR = true;
+    // MSAA CCPR was slow on Android. http://skbug.com/9676
+    fDriverDisableMSAAClipAtlas = true;
 #endif
 
     if (kARM_VkVendor == properties.vendorID) {
@@ -1552,12 +1546,13 @@ GrCaps::SurfaceReadPixelsSupport GrVkCaps::surfaceSupportsReadPixels(
         return SurfaceReadPixelsSupport::kUnsupported;
     }
     if (auto tex = static_cast<const GrVkTexture*>(surface->asTexture())) {
+        auto texAttachment = tex->textureAttachment();
         // We can't directly read from a VkImage that has a ycbcr sampler.
-        if (tex->ycbcrConversionInfo().isValid()) {
+        if (texAttachment->ycbcrConversionInfo().isValid()) {
             return SurfaceReadPixelsSupport::kCopyToTexture2D;
         }
         // We can't directly read from a compressed format
-        if (GrVkFormatIsCompressed(tex->imageFormat())) {
+        if (GrVkFormatIsCompressed(texAttachment->imageFormat())) {
             return SurfaceReadPixelsSupport::kCopyToTexture2D;
         }
         return SurfaceReadPixelsSupport::kSupported;
@@ -1577,7 +1572,7 @@ bool GrVkCaps::onSurfaceSupportsWritePixels(const GrSurface* surface) const {
     // We can't write to a texture that has a ycbcr sampler.
     if (auto tex = static_cast<const GrVkTexture*>(surface->asTexture())) {
         // We can't directly read from a VkImage that has a ycbcr sampler.
-        if (tex->ycbcrConversionInfo().isValid()) {
+        if (tex->textureAttachment()->ycbcrConversionInfo().isValid()) {
             return false;
         }
     }
@@ -1780,12 +1775,9 @@ GrProgramDesc GrVkCaps::makeDesc(GrRenderTarget* rt,
                                  const GrProgramInfo& programInfo,
                                  ProgramDescOverrideFlags overrideFlags) const {
     GrProgramDesc desc;
-    if (!GrProgramDesc::Build(&desc, rt, programInfo, *this)) {
-        SkASSERT(!desc.isValid());
-        return desc;
-    }
+    GrProgramDesc::Build(&desc, rt, programInfo, *this);
 
-    GrProcessorKeyBuilder b(&desc.key());
+    GrProcessorKeyBuilder b(desc.key());
 
     // This will become part of the sheared off key used to persistently cache
     // the SPIRV code. It needs to be added right after the base key so that,
@@ -1817,8 +1809,8 @@ GrProgramDesc GrVkCaps::makeDesc(GrRenderTarget* rt,
     if (rt) {
         GrVkRenderTarget* vkRT = (GrVkRenderTarget*) rt;
 
-        SkASSERT(!needsResolve ||
-                 (vkRT->resolveAttachmentView() && vkRT->supportsInputAttachmentUsage()));
+        SkASSERT(!needsResolve || (vkRT->resolveAttachment() &&
+                                   vkRT->resolveAttachment()->supportsInputAttachmentUsage()));
 
         bool needsStencil = programInfo.numStencilSamples() || programInfo.isStencilEnabled();
         // TODO: support failure in getSimpleRenderPass

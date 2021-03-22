@@ -20,7 +20,6 @@ float4 _skOutParamHelper0_fn(thread Outputs& _out, thread Globals& _globals, flo
     d[1].zyx = _var3;
     return _skResult;
 }
-
 float4 fn(thread Outputs& _out, thread Globals& _globals, float a, thread float2& b, thread float2& c, thread float3& d) {
     a = _out.sk_FragColor.x + a;
     b = _out.sk_FragColor.yz - _globals.glob.y;
@@ -35,7 +34,6 @@ fragment Outputs fragmentMain(Inputs _in [[stage_in]], bool _frontFacing [[front
     (void)_out;
     float2 a = float2(1.0);
     float3 b = float3(2.0);
-    float4x4 c = float4x4(3.0);
     float3x3 d = float3x3(4.0);
     _out.sk_FragColor =     _skOutParamHelper0_fn(_out, _globals, a.x, b, _globals.glob, d);
     return _out;

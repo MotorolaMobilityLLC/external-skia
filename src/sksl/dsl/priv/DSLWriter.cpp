@@ -7,15 +7,17 @@
 
 #include "src/sksl/dsl/priv/DSLWriter.h"
 
+#include "include/private/SkSLDefines.h"
+#include "include/sksl/DSLCore.h"
+#include "include/sksl/DSLErrorHandling.h"
 #if !defined(SKSL_STANDALONE) && SK_SUPPORT_GPU
+#include "src/gpu/glsl/GrGLSLFragmentShaderBuilder.h"
 #include "src/gpu/mock/GrMockCaps.h"
 #endif // !defined(SKSL_STANDALONE) && SK_SUPPORT_GPU
 #include "src/sksl/SkSLCompiler.h"
-#include "src/sksl/SkSLDefines.h"
 #include "src/sksl/SkSLIRGenerator.h"
-#include "src/sksl/dsl/DSLCore.h"
-#include "src/sksl/dsl/DSLErrorHandling.h"
 #include "src/sksl/ir/SkSLBinaryExpression.h"
+#include "src/sksl/ir/SkSLBlock.h"
 #include "src/sksl/ir/SkSLConstructor.h"
 #include "src/sksl/ir/SkSLPostfixExpression.h"
 #include "src/sksl/ir/SkSLPrefixExpression.h"
@@ -40,12 +42,20 @@ DSLWriter::DSLWriter(SkSL::Compiler* compiler)
     ir.fSymbolTable = module.fSymbols;
     fCompiler->fContext->fConfig = &fConfig;
     ir.pushSymbolTable();
+    if (compiler->context().fCaps.useNodePools()) {
+        fPool = Pool::Create();
+        fPool->attachToThread();
+    }
 }
 
 DSLWriter::~DSLWriter() {
     SkSL::IRGenerator& ir = *fCompiler->fIRGenerator;
     ir.fSymbolTable = fOldSymbolTable;
     fCompiler->fContext->fConfig = fOldConfig;
+    fProgramElements.clear();
+    if (fPool) {
+        fPool->detachFromThread();
+    }
 }
 
 SkSL::IRGenerator& DSLWriter::IRGenerator() {
@@ -60,15 +70,20 @@ const std::shared_ptr<SkSL::SymbolTable>& DSLWriter::SymbolTable() {
     return IRGenerator().fSymbolTable;
 }
 
+void DSLWriter::Reset() {
+    IRGenerator().popSymbolTable();
+    IRGenerator().pushSymbolTable();
+    ProgramElements().clear();
+}
+
 const SkSL::Modifiers* DSLWriter::Modifiers(SkSL::Modifiers modifiers) {
     return IRGenerator().fModifiers->addToPool(modifiers);
 }
 
 const char* DSLWriter::Name(const char* name) {
     if (ManglingEnabled()) {
-        auto mangled =
-                std::make_unique<String>(Instance().fMangler.uniqueName(name, SymbolTable().get()));
-        const SkSL::String* s = SymbolTable()->takeOwnershipOfString(std::move(mangled));
+        const String* s = SymbolTable()->takeOwnershipOfString(
+                Instance().fMangler.uniqueName(name, SymbolTable().get()));
         return s->c_str();
     }
     return name;
@@ -84,14 +99,20 @@ void DSLWriter::StartFragmentProcessor(GrGLSLFragmentProcessor* processor,
 void DSLWriter::EndFragmentProcessor() {
     DSLWriter& instance = Instance();
     SkASSERT(!instance.fStack.empty());
+    CurrentEmitArgs()->fFragBuilder->fDeclarations.reset();
     instance.fStack.pop();
     IRGenerator().popSymbolTable();
 }
 
 GrGLSLUniformHandler::UniformHandle DSLWriter::VarUniformHandle(const DSLVar& var) {
-    return var.uniformHandle();
+    return GrGLSLUniformHandler::UniformHandle(var.fUniformHandle);
 }
 #endif // !defined(SKSL_STANDALONE) && SK_SUPPORT_GPU
+
+std::unique_ptr<SkSL::Expression> DSLWriter::Call(const FunctionDeclaration& function,
+                                                  ExpressionArray arguments) {
+    return IRGenerator().call(/*offset=*/-1, function, std::move(arguments));
+}
 
 std::unique_ptr<SkSL::Expression> DSLWriter::Check(std::unique_ptr<SkSL::Expression> expr) {
     if (DSLWriter::Compiler().errorCount()) {
@@ -124,12 +145,12 @@ std::unique_ptr<SkSL::Expression> DSLWriter::ConvertBinary(std::unique_ptr<Expre
 
 std::unique_ptr<SkSL::Expression> DSLWriter::ConvertField(std::unique_ptr<Expression> base,
                                                           const char* name) {
-    return IRGenerator().convertField(std::move(base), name);
+    return FieldAccess::Convert(Context(), std::move(base), name);
 }
 
 std::unique_ptr<SkSL::Expression> DSLWriter::ConvertIndex(std::unique_ptr<Expression> base,
                                                           std::unique_ptr<Expression> index) {
-    return IRGenerator().convertIndex(std::move(base), std::move(index));
+    return IndexExpression::Convert(Context(), std::move(base), std::move(index));
 }
 
 std::unique_ptr<SkSL::Expression> DSLWriter::ConvertPostfix(std::unique_ptr<Expression> expr,
@@ -145,8 +166,17 @@ std::unique_ptr<SkSL::Expression> DSLWriter::ConvertPrefix(Operator op,
 DSLPossibleStatement DSLWriter::ConvertSwitch(std::unique_ptr<Expression> value,
                                               ExpressionArray caseValues,
                                               SkTArray<SkSL::StatementArray> caseStatements) {
+    StatementArray caseBlocks;
+    caseBlocks.resize(caseStatements.count());
+    for (int index = 0; index < caseStatements.count(); ++index) {
+        caseBlocks[index] = std::make_unique<SkSL::Block>(/*offset=*/-1,
+                                                          std::move(caseStatements[index]),
+                                                          /*symbols=*/nullptr,
+                                                          /*isScope=*/false);
+    }
+
     return SwitchStatement::Convert(Context(), /*offset=*/-1, /*isStatic=*/false, std::move(value),
-                                    std::move(caseValues), std::move(caseStatements),
+                                    std::move(caseValues), std::move(caseBlocks),
                                     IRGenerator().fSymbolTable);
 }
 
@@ -165,7 +195,12 @@ void DSLWriter::ReportError(const char* msg, PositionInfo* info) {
 }
 
 const SkSL::Variable& DSLWriter::Var(const DSLVar& var) {
-    return *var.var();
+    return *var.fVar;
+}
+
+void DSLWriter::MarkDeclared(DSLVar& var) {
+    SkASSERT(!var.fDeclared);
+    var.fDeclared = true;
 }
 
 #if !SK_SUPPORT_GPU || defined(SKSL_STANDALONE)

@@ -336,10 +336,10 @@ sk_sp<GrGpu> GrGLGpu::Make(sk_sp<const GrGLInterface> interface, const GrContext
     return sk_sp<GrGpu>(new GrGLGpu(std::move(glContext), direct));
 }
 
-GrGLGpu::GrGLGpu(std::unique_ptr<GrGLContext> ctx, GrDirectContext* direct)
-        : GrGpu(direct)
+GrGLGpu::GrGLGpu(std::unique_ptr<GrGLContext> ctx, GrDirectContext* dContext)
+        : GrGpu(dContext)
         , fGLContext(std::move(ctx))
-        , fProgramCache(new ProgramCache(this))
+        , fProgramCache(new ProgramCache(dContext->priv().options().fRuntimeProgramCacheSize))
         , fHWProgramID(0)
         , fTempSrcFBOID(0)
         , fTempDstFBOID(0)
@@ -1817,7 +1817,8 @@ void GrGLGpu::disableWindowRectangles() {
 bool GrGLGpu::flushGLState(GrRenderTarget* renderTarget, const GrProgramInfo& programInfo) {
     this->handleDirtyContext();
 
-    sk_sp<GrGLProgram> program = fProgramCache->findOrCreateProgram(renderTarget, programInfo);
+    sk_sp<GrGLProgram> program = fProgramCache->findOrCreateProgram(this->getContext(),
+                                                                    renderTarget, programInfo);
     if (!program) {
         GrCapsDebugf(this->caps(), "Failed to create program!\n");
         return false;
@@ -2927,7 +2928,6 @@ void GrGLGpu::onFBOChanged() {
 }
 
 void GrGLGpu::bindFramebuffer(GrGLenum target, GrGLuint fboid) {
-    fStats.incRenderTargetBinds();
     GL_CALL(BindFramebuffer(target, fboid));
     if (target == GR_GL_FRAMEBUFFER || target == GR_GL_DRAW_FRAMEBUFFER) {
         fBoundDrawFramebuffer = fboid;
@@ -3691,7 +3691,8 @@ bool GrGLGpu::compile(const GrProgramDesc& desc, const GrProgramInfo& programInf
 
     GrThreadSafePipelineBuilder::Stats::ProgramCacheResult stat;
 
-    sk_sp<GrGLProgram> tmp = fProgramCache->findOrCreateProgram(desc, programInfo, &stat);
+    sk_sp<GrGLProgram> tmp = fProgramCache->findOrCreateProgram(this->getContext(),
+                                                                desc, programInfo, &stat);
     if (!tmp) {
         return false;
     }

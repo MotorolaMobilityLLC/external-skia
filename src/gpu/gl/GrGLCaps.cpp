@@ -594,12 +594,6 @@ void GrGLCaps::init(const GrContextOptions& contextOptions,
     fPreferVRAMUseOverFlushes = !isANGLE;
 #endif
 
-    if (kARM_GrGLVendor == ctxInfo.vendor()) {
-        // ARM seems to do better with larger quantities of fine triangles, as opposed to using the
-        // sample mask. (At least in our current round rect op.)
-        fPreferTrianglesOverSampleMask = true;
-    }
-
     if (kChromium_GrGLDriver == ctxInfo.driver()) {
         fMustClearUploadedBufferData = true;
     }
@@ -3984,22 +3978,6 @@ void GrGLCaps::applyDriverCorrectnessWorkarounds(const GrGLContextInfo& ctxInfo,
     fWritePixelsRowBytesSupport = false;
 #endif
 
-    // CCPR edge AA is busted on Mesa, Sandy Bridge/Valley View (Bay Trail).
-    // http://skbug.com/8162
-    if (kMesa_GrGLDriver == ctxInfo.driver() &&
-        (kIntelSandyBridge_GrGLRenderer == ctxInfo.renderer() ||
-         kIntelIvyBridge_GrGLRenderer == ctxInfo.renderer() ||
-         kIntelValleyView_GrGLRenderer == ctxInfo.renderer())) {
-        fDriverDisableCCPR = true;
-    }
-
-    // Temporarily disable the MSAA implementation of CCPR on various platforms while we work out
-    // specific issues.
-    if (kATI_GrGLVendor == ctxInfo.vendor() ||  // Radeon drops stencil draws that use sample mask.
-        kImagination_GrGLVendor == ctxInfo.vendor() /* PowerVR produces flaky results on Gold. */) {
-        fDriverDisableMSAACCPR = true;
-    }
-
     if (kIntel_GrGLVendor == ctxInfo.vendor() ||  // IntelIris640 drops draws completely.
         ctxInfo.renderer() == kMaliT_GrGLRenderer ||  // Some curves appear flat on GalaxyS6.
         ctxInfo.renderer() == kAdreno3xx_GrGLRenderer ||
@@ -4596,8 +4574,7 @@ GrProgramDesc GrGLCaps::makeDesc(GrRenderTarget* rt,
                                  ProgramDescOverrideFlags overrideFlags) const {
     SkASSERT(overrideFlags == ProgramDescOverrideFlags::kNone);
     GrProgramDesc desc;
-    SkDEBUGCODE(bool result =) GrProgramDesc::Build(&desc, rt, programInfo, *this);
-    SkASSERT(result == desc.isValid());
+    GrProgramDesc::Build(&desc, rt, programInfo, *this);
     return desc;
 }
 

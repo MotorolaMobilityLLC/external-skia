@@ -12,9 +12,7 @@ layout (binding = 0) uniform uniformBuffer {
 };
 layout (location = 0) in vec2 vLocalCoord_Stage0;
 vec4 MatrixEffect_Stage1_c0_c0(vec4 _input, vec2 _coords) {
-    vec4 _output;
     vec2 _0_coords = (umatrix_Stage1_c0_c0 * vec3(_coords, 1.0)).xy;
-    vec4 _1_output;
     vec2 _2_inCoord = _0_coords;
     _2_inCoord *= unorm_Stage1_c0_c0_c0.xy;
     vec2 _3_subsetCoord;
@@ -28,7 +26,6 @@ vec4 MatrixEffect_Stage1_c0_c0(vec4 _input, vec2 _coords) {
         _5_textureColor = uborder_Stage1_c0_c0_c0;
     }
     return _5_textureColor;
-
 }
 void main() {
     vec4 outputColor_Stage0;
@@ -119,7 +116,6 @@ void main() {
     _8_coord += uIncrement_Stage1_c0;
     _7_output *= outputColor_Stage0;
     output_Stage1 = _7_output;
-
     {
         sk_FragColor = output_Stage1 * outputCoverage_Stage0;
     }

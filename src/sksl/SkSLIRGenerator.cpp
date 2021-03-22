@@ -12,6 +12,7 @@
 #include <memory>
 #include <unordered_set>
 
+#include "include/private/SkSLLayout.h"
 #include "include/private/SkTArray.h"
 #include "src/core/SkScopeExit.h"
 #include "src/sksl/SkSLAnalysis.h"
@@ -44,7 +45,6 @@
 #include "src/sksl/ir/SkSLIndexExpression.h"
 #include "src/sksl/ir/SkSLIntLiteral.h"
 #include "src/sksl/ir/SkSLInterfaceBlock.h"
-#include "src/sksl/ir/SkSLLayout.h"
 #include "src/sksl/ir/SkSLNop.h"
 #include "src/sksl/ir/SkSLPostfixExpression.h"
 #include "src/sksl/ir/SkSLPrefixExpression.h"
@@ -141,7 +141,7 @@ std::unique_ptr<ModifiersPool> IRGenerator::releaseModifiers() {
     return result;
 }
 
-std::unique_ptr<Statement> IRGenerator::convertSingleStatement(const ASTNode& statement) {
+std::unique_ptr<Statement> IRGenerator::convertStatement(const ASTNode& statement) {
     switch (statement.fKind) {
         case ASTNode::Kind::kBlock:
             return this->convertBlock(statement);
@@ -181,31 +181,13 @@ std::unique_ptr<Statement> IRGenerator::convertSingleStatement(const ASTNode& st
                         statements.reserve_back(2);
                         statements.push_back(getNormalizeSkPositionCode());
                         statements.push_back(std::move(result));
-                        return std::make_unique<Block>(statement.fOffset, std::move(statements),
-                                                       fSymbolTable);
+                        return Block::Make(statement.fOffset, std::move(statements),
+                                           fSymbolTable, /*isScope=*/true);
                     }
                 }
             }
             return result;
     }
-}
-
-std::unique_ptr<Statement> IRGenerator::convertStatement(const ASTNode& statement) {
-    StatementArray oldExtraStatements = std::move(fExtraStatements);
-    std::unique_ptr<Statement> result = this->convertSingleStatement(statement);
-    if (!result) {
-        fExtraStatements = std::move(oldExtraStatements);
-        return nullptr;
-    }
-    if (fExtraStatements.size()) {
-        fExtraStatements.push_back(std::move(result));
-        auto block = std::make_unique<Block>(/*offset=*/-1, std::move(fExtraStatements),
-                                             /*symbols=*/nullptr, /*isScope=*/false);
-        fExtraStatements = std::move(oldExtraStatements);
-        return std::move(block);
-    }
-    fExtraStatements = std::move(oldExtraStatements);
-    return result;
 }
 
 std::unique_ptr<Block> IRGenerator::convertBlock(const ASTNode& block) {
@@ -219,7 +201,7 @@ std::unique_ptr<Block> IRGenerator::convertBlock(const ASTNode& block) {
         }
         statements.push_back(std::move(statement));
     }
-    return std::make_unique<Block>(block.fOffset, std::move(statements), fSymbolTable);
+    return Block::Make(block.fOffset, std::move(statements), fSymbolTable);
 }
 
 std::unique_ptr<Statement> IRGenerator::convertVarDeclarationStatement(const ASTNode& s) {
@@ -228,12 +210,7 @@ std::unique_ptr<Statement> IRGenerator::convertVarDeclarationStatement(const AST
     if (decls.empty()) {
         return nullptr;
     }
-    if (decls.size() == 1) {
-        return std::move(decls.front());
-    } else {
-        return std::make_unique<Block>(s.fOffset, std::move(decls), /*symbols=*/nullptr,
-                                       /*isScope=*/false);
-    }
+    return Block::MakeUnscoped(s.fOffset, std::move(decls));
 }
 
 int IRGenerator::convertArraySize(const Type& type, int offset, const ASTNode& s) {
@@ -253,7 +230,7 @@ int IRGenerator::convertArraySize(const Type& type, std::unique_ptr<Expression> 
     if (!size) {
         return 0;
     }
-    if (type == *fContext.fTypes.fVoid) {
+    if (type.isVoid()) {
         this->errorReporter().error(size->fOffset, "type 'void' may not be used in an array");
         return 0;
     }
@@ -415,6 +392,14 @@ std::unique_ptr<Statement> IRGenerator::convertVarDeclaration(std::unique_ptr<Va
         if (!Analysis::IsConstantExpression(*value)) {
             this->errorReporter().error(
                     value->fOffset, "'const' variable initializer must be a constant expression");
+            return nullptr;
+        }
+    }
+    if (this->programKind() != ProgramKind::kFragmentProcessor &&
+        var->storage() == Variable::Storage::kGlobal && value) {
+        if (!Analysis::IsConstantExpression(*value)) {
+            this->errorReporter().error(
+                    value->fOffset, "global variable initializer must be a constant expression");
             return nullptr;
         }
     }
@@ -619,6 +604,9 @@ std::unique_ptr<Statement> IRGenerator::convertFor(const ASTNode& f) {
     if (!statement) {
         return nullptr;
     }
+    if (this->detectVarDeclarationWithoutScope(*statement)) {
+        return nullptr;
+    }
 
     return ForStatement::Convert(fContext, f.fOffset, std::move(initializer), std::move(test),
                                  std::move(next), std::move(statement), fSymbolTable);
@@ -669,7 +657,7 @@ std::unique_ptr<Statement> IRGenerator::convertSwitch(const ASTNode& s) {
     }
     AutoSymbolTable table(this);
     ExpressionArray caseValues;
-    SkTArray<StatementArray> caseStatements;
+    StatementArray caseStatements;
     for (; iter != s.end(); ++iter) {
         const ASTNode& c = *iter;
         SkASSERT(c.fKind == ASTNode::Kind::kSwitchCase);
@@ -682,6 +670,7 @@ std::unique_ptr<Statement> IRGenerator::convertSwitch(const ASTNode& s) {
             }
         }
         ++childIter;
+
         StatementArray statements;
         for (; childIter != c.end(); ++childIter) {
             std::unique_ptr<Statement> converted = this->convertStatement(*childIter);
@@ -690,7 +679,8 @@ std::unique_ptr<Statement> IRGenerator::convertSwitch(const ASTNode& s) {
             }
             statements.push_back(std::move(converted));
         }
-        caseStatements.push_back(std::move(statements));
+
+        caseStatements.push_back(Block::MakeUnscoped(c.fOffset, std::move(statements)));
     }
     return SwitchStatement::Convert(fContext, s.fOffset, s.getBool(), std::move(value),
                                     std::move(caseValues), std::move(caseStatements), fSymbolTable);
@@ -706,11 +696,7 @@ std::unique_ptr<Statement> IRGenerator::convertExpressionStatement(const ASTNode
 
 std::unique_ptr<Statement> IRGenerator::convertReturn(int offset,
                                                       std::unique_ptr<Expression> result) {
-    if (result) {
-        return std::make_unique<ReturnStatement>(std::move(result));
-    } else {
-        return std::make_unique<ReturnStatement>(offset);
-    }
+    return ReturnStatement::Make(offset, std::move(result));
 }
 
 std::unique_ptr<Statement> IRGenerator::convertReturn(const ASTNode& r) {
@@ -728,12 +714,12 @@ std::unique_ptr<Statement> IRGenerator::convertReturn(const ASTNode& r) {
 
 std::unique_ptr<Statement> IRGenerator::convertBreak(const ASTNode& b) {
     SkASSERT(b.fKind == ASTNode::Kind::kBreak);
-    return std::make_unique<BreakStatement>(b.fOffset);
+    return BreakStatement::Make(b.fOffset);
 }
 
 std::unique_ptr<Statement> IRGenerator::convertContinue(const ASTNode& c) {
     SkASSERT(c.fKind == ASTNode::Kind::kContinue);
-    return std::make_unique<ContinueStatement>(c.fOffset);
+    return ContinueStatement::Make(c.fOffset);
 }
 
 std::unique_ptr<Statement> IRGenerator::convertDiscard(const ASTNode& d) {
@@ -744,7 +730,7 @@ std::unique_ptr<Statement> IRGenerator::convertDiscard(const ASTNode& d) {
                                     "discard statement is only permitted in fragment shaders");
         return nullptr;
     }
-    return std::make_unique<DiscardStatement>(d.fOffset);
+    return DiscardStatement::Make(d.fOffset);
 }
 
 std::unique_ptr<Block> IRGenerator::applyInvocationIDWorkaround(std::unique_ptr<Block> main) {
@@ -767,7 +753,7 @@ std::unique_ptr<Block> IRGenerator::applyInvocationIDWorkaround(std::unique_ptr<
             fContext,
             std::make_unique<VariableReference>(/*offset=*/-1, loopIdx),
             Token::Kind::TK_LT,
-            std::make_unique<IntLiteral>(fContext, /*offset=*/-1, fInvocations));
+            IntLiteral::Make(fContext, /*offset=*/-1, fInvocations));
     auto next = PostfixExpression::Make(
             fContext,
             std::make_unique<VariableReference>(/*offset=*/-1, loopIdx,VariableRefKind::kReadWrite),
@@ -788,14 +774,17 @@ std::unique_ptr<Block> IRGenerator::applyInvocationIDWorkaround(std::unique_ptr<
             fContext,
             std::make_unique<VariableReference>(/*offset=*/-1, loopIdx, VariableRefKind::kWrite),
             Token::Kind::TK_EQ,
-            std::make_unique<IntLiteral>(fContext, /*offset=*/-1, /*value=*/0));
+            IntLiteral::Make(fContext, /*offset=*/-1, /*value=*/0));
     auto initializer = ExpressionStatement::Make(fContext, std::move(assignment));
-    auto loop = ForStatement::Make(
-            fContext, /*offset=*/-1, std::move(initializer), std::move(test), std::move(next),
-            std::make_unique<Block>(/*offset=*/-1, std::move(loopBody)), fSymbolTable);
+    auto loop = ForStatement::Make(fContext, /*offset=*/-1,
+                                   std::move(initializer),
+                                   std::move(test),
+                                   std::move(next),
+                                   Block::Make(/*offset=*/-1, std::move(loopBody)),
+                                   fSymbolTable);
     StatementArray children;
     children.push_back(std::move(loop));
-    return std::make_unique<Block>(/*offset=*/-1, std::move(children));
+    return Block::Make(/*offset=*/-1, std::move(children));
 }
 
 std::unique_ptr<Statement> IRGenerator::getNormalizeSkPositionCode() {
@@ -818,12 +807,12 @@ std::unique_ptr<Statement> IRGenerator::getNormalizeSkPositionCode() {
                                                    VariableReference::RefKind::kWrite);
     };
     auto Field = [&](const Variable* var, int idx) -> std::unique_ptr<Expression> {
-        return std::make_unique<FieldAccess>(Ref(var), idx,
-                                             FieldAccess::OwnerKind::kAnonymousInterfaceBlock);
+        return FieldAccess::Make(fContext, Ref(var), idx,
+                                 FieldAccess::OwnerKind::kAnonymousInterfaceBlock);
     };
     auto Pos = [&]() -> std::unique_ptr<Expression> {
-        return std::make_unique<FieldAccess>(WRef(skPerVertex), 0,
-                                             FieldAccess::OwnerKind::kAnonymousInterfaceBlock);
+        return FieldAccess::Make(fContext, WRef(skPerVertex), 0,
+                                 FieldAccess::OwnerKind::kAnonymousInterfaceBlock);
     };
     auto Adjust = [&]() -> std::unique_ptr<Expression> {
         return fRTAdjustInterfaceBlock ? Field(fRTAdjustInterfaceBlock, fRTAdjustFieldIndex)
@@ -850,7 +839,7 @@ std::unique_ptr<Statement> IRGenerator::getNormalizeSkPositionCode() {
             Op(Swizzle(Pos(), kXYIndices), Token::Kind::TK_STAR, Swizzle(Adjust(), kXZIndices)),
             Token::Kind::TK_PLUS,
             Op(Swizzle(Pos(), kWWIndices), Token::Kind::TK_STAR, Swizzle(Adjust(), kYWIndices))));
-    children.push_back(std::make_unique<FloatLiteral>(fContext, /*offset=*/-1, /*value=*/0.0));
+    children.push_back(FloatLiteral::Make(fContext, /*offset=*/-1, /*value=*/0.0));
     children.push_back(Swizzle(Pos(), kWIndex));
     std::unique_ptr<Expression> result =
             Op(Pos(), Token::Kind::TK_EQ,
@@ -882,6 +871,7 @@ void IRGenerator::checkModifiers(int offset,
     checkModifier(Modifiers::kHasSideEffects_Flag, "sk_has_side_effects");
     checkModifier(Modifiers::kVarying_Flag,        "varying");
     checkModifier(Modifiers::kInline_Flag,         "inline");
+    checkModifier(Modifiers::kNoInline_Flag,       "noinline");
     SkASSERT(flags == 0);
 
     int layoutFlags = modifiers.fLayout.fFlags;
@@ -918,7 +908,7 @@ void IRGenerator::checkModifiers(int offset,
     SkASSERT(layoutFlags == 0);
 }
 
-void IRGenerator::finalizeFunction(FunctionDefinition& f) {
+void IRGenerator::finalizeFunction(const FunctionDeclaration& funcDecl, Statement* body) {
     class Finalizer : public ProgramWriter {
     public:
         Finalizer(IRGenerator* irGenerator, const FunctionDeclaration* function)
@@ -928,22 +918,10 @@ void IRGenerator::finalizeFunction(FunctionDefinition& f) {
         ~Finalizer() override {
             SkASSERT(!fBreakableLevel);
             SkASSERT(!fContinuableLevel);
-
-            if (!fEncounteredReturnValue && this->functionReturnsValue()) {
-                // It's a non-void function, but it never created a result expression--that is, it
-                // never returned anything.
-                fIRGenerator->errorReporter().error(
-                        fFunction->fOffset,
-                        "function '" + fFunction->name() + "' exits without returning a value");
-            }
         }
 
         bool functionReturnsValue() const {
-            return fFunction->returnType() != *fIRGenerator->fContext.fTypes.fVoid;
-        }
-
-        bool encounteredReturnValue() const {
-            return fEncounteredReturnValue;
+            return !fFunction->returnType().isVoid();
         }
 
         bool visitStatement(Statement& stmt) override {
@@ -965,7 +943,6 @@ void IRGenerator::finalizeFunction(FunctionDefinition& f) {
                             // Coerce return expression to the function's return type.
                             returnStmt.setExpression(fIRGenerator->coerce(
                                     std::move(returnStmt.expression()), returnType));
-                            fEncounteredReturnValue = true;
                         } else {
                             // Returning something from a function with a void return type.
                             fIRGenerator->errorReporter().error(returnStmt.fOffset,
@@ -1020,12 +997,17 @@ void IRGenerator::finalizeFunction(FunctionDefinition& f) {
         int fBreakableLevel = 0;
         // how deeply nested we are in continuable constructs (for, do).
         int fContinuableLevel = 0;
-        // have we found a return statement with a return value?
-        bool fEncounteredReturnValue = false;
 
         using INHERITED = ProgramWriter;
     };
-    Finalizer(this, &f.declaration()).visitStatement(*f.body());
+
+    Finalizer finalizer{this, &funcDecl};
+    finalizer.visitStatement(*body);
+
+    if (Analysis::CanExitWithoutReturningValue(funcDecl, *body)) {
+        this->errorReporter().error(funcDecl.fOffset, "function '" + funcDecl.name() +
+                                                      "' can exit without returning a value");
+    }
 }
 
 void IRGenerator::convertFunction(const ASTNode& f) {
@@ -1047,22 +1029,28 @@ void IRGenerator::convertFunction(const ASTNode& f) {
                                     "functions may not return structs containing arrays");
         return;
     }
-    if (!fIsBuiltinCode && *returnType != *fContext.fTypes.fVoid &&
-        returnType->componentType().isOpaque()) {
+    if (!fIsBuiltinCode && !returnType->isVoid() && returnType->componentType().isOpaque()) {
         this->errorReporter().error(
                 f.fOffset,
                 "functions may not return opaque type '" + returnType->displayName() + "'");
         return;
     }
     const ASTNode::FunctionData& funcData = f.getFunctionData();
-    this->checkModifiers(f.fOffset, funcData.fModifiers,
-                         Modifiers::kHasSideEffects_Flag | Modifiers::kInline_Flag,
-                         /*permittedLayoutFlags=*/0);
+    this->checkModifiers(
+            f.fOffset,
+            funcData.fModifiers,
+            Modifiers::kHasSideEffects_Flag | Modifiers::kInline_Flag | Modifiers::kNoInline_Flag,
+            /*permittedLayoutFlags=*/0);
+    if ((funcData.fModifiers.fFlags & Modifiers::kInline_Flag) &&
+        (funcData.fModifiers.fFlags & Modifiers::kNoInline_Flag)) {
+        this->errorReporter().error(f.fOffset, "functions cannot be both 'inline' and 'noinline'");
+    }
+
     std::vector<const Variable*> parameters;
     for (size_t i = 0; i < funcData.fParameterCount; ++i) {
         const ASTNode& param = *(iter++);
         SkASSERT(param.fKind == ASTNode::Kind::kParameter);
-        ASTNode::ParameterData pd = param.getParameterData();
+        const ASTNode::ParameterData& pd = param.getParameterData();
         this->checkModifiers(param.fOffset, pd.fModifiers,
                              Modifiers::kConst_Flag | Modifiers::kIn_Flag | Modifiers::kOut_Flag,
                              /*permittedLayoutFlags=*/0);
@@ -1251,9 +1239,9 @@ void IRGenerator::convertFunction(const ASTNode& f) {
         if (ProgramKind::kVertex == this->programKind() && funcData.fName == "main" && fRTAdjust) {
             body->children().push_back(this->getNormalizeSkPositionCode());
         }
+        this->finalizeFunction(*decl, body.get());
         auto result = std::make_unique<FunctionDefinition>(
                 f.fOffset, decl, fIsBuiltinCode, std::move(body), std::move(fReferencedIntrinsics));
-        this->finalizeFunction(*result);
         decl->setDefinition(result.get());
         result->setSource(&f);
         fProgramElements->push_back(std::move(result));
@@ -1286,7 +1274,7 @@ std::unique_ptr<InterfaceBlock> IRGenerator::convertInterfaceBlock(const ASTNode
     }
 
     SkASSERT(intf.fKind == ASTNode::Kind::kInterfaceBlock);
-    ASTNode::InterfaceBlockData id = intf.getInterfaceBlockData();
+    const ASTNode::InterfaceBlockData& id = intf.getInterfaceBlockData();
     std::shared_ptr<SymbolTable> old = fSymbolTable;
     std::shared_ptr<SymbolTable> symbols;
     std::vector<Type::Field> fields;
@@ -1413,7 +1401,7 @@ void IRGenerator::convertEnum(const ASTNode& e) {
                 return;
             }
         }
-        value = std::make_unique<IntLiteral>(fContext, e.fOffset, currentValue);
+        value = IntLiteral::Make(fContext, e.fOffset, currentValue);
         ++currentValue;
         auto var = std::make_unique<Variable>(e.fOffset, fModifiers->addToPool(modifiers),
                                               child.getString(), type, fIsBuiltinCode,
@@ -1458,7 +1446,7 @@ const Type* IRGenerator::convertType(const ASTNode& type, bool allowVoid) {
     }
     const Type* result = &symbol->as<Type>();
     const bool isArray = (type.begin() != type.end());
-    if (*result == *fContext.fTypes.fVoid && !allowVoid) {
+    if (result->isVoid() && !allowVoid) {
         this->errorReporter().error(type.fOffset,
                                     "type '" + name + "' not allowed in this context");
         return nullptr;
@@ -1483,22 +1471,19 @@ std::unique_ptr<Expression> IRGenerator::convertExpression(const ASTNode& expr) 
         case ASTNode::Kind::kBinary:
             return this->convertBinaryExpression(expr);
         case ASTNode::Kind::kBool:
-            return std::unique_ptr<Expression>(new BoolLiteral(fContext, expr.fOffset,
-                                                               expr.getBool()));
+            return BoolLiteral::Make(fContext, expr.fOffset, expr.getBool());
         case ASTNode::Kind::kCall:
             return this->convertCallExpression(expr);
         case ASTNode::Kind::kField:
             return this->convertFieldExpression(expr);
         case ASTNode::Kind::kFloat:
-            return std::unique_ptr<Expression>(new FloatLiteral(fContext, expr.fOffset,
-                                                                expr.getFloat()));
+            return FloatLiteral::Make(fContext, expr.fOffset, expr.getFloat());
         case ASTNode::Kind::kIdentifier:
             return this->convertIdentifier(expr);
         case ASTNode::Kind::kIndex:
             return this->convertIndexExpression(expr);
         case ASTNode::Kind::kInt:
-            return std::unique_ptr<Expression>(new IntLiteral(fContext, expr.fOffset,
-                                                              expr.getInt()));
+            return IntLiteral::Make(fContext, expr.fOffset, expr.getInt());
         case ASTNode::Kind::kPostfix:
             return this->convertPostfixExpression(expr);
         case ASTNode::Kind::kPrefix:
@@ -1559,7 +1544,7 @@ std::unique_ptr<Expression> IRGenerator::convertIdentifier(int offset, StringFra
                 bool valid = false;
                 for (const auto& decl : fFile->root()) {
                     if (decl.fKind == ASTNode::Kind::kSection) {
-                        ASTNode::SectionData section = decl.getSectionData();
+                        const ASTNode::SectionData& section = decl.getSectionData();
                         if (section.fName == "setData") {
                             valid = true;
                             break;
@@ -1582,9 +1567,8 @@ std::unique_ptr<Expression> IRGenerator::convertIdentifier(int offset, StringFra
             const Field* field = &result->as<Field>();
             auto base = std::make_unique<VariableReference>(offset, &field->owner(),
                                                             VariableReference::RefKind::kRead);
-            return std::make_unique<FieldAccess>(std::move(base),
-                                                 field->fieldIndex(),
-                                                 FieldAccess::OwnerKind::kAnonymousInterfaceBlock);
+            return FieldAccess::Make(fContext, std::move(base), field->fieldIndex(),
+                                     FieldAccess::OwnerKind::kAnonymousInterfaceBlock);
         }
         case Symbol::Kind::kType: {
             const Type* t = &result->as<Type>();
@@ -1609,7 +1593,7 @@ std::unique_ptr<Section> IRGenerator::convertSection(const ASTNode& s) {
         return nullptr;
     }
 
-    ASTNode::SectionData section = s.getSectionData();
+    const ASTNode::SectionData& section = s.getSectionData();
     return std::make_unique<Section>(s.fOffset, section.fName, section.fArgument,
                                                 section.fText);
 }
@@ -1842,21 +1826,6 @@ std::unique_ptr<Expression> IRGenerator::convertPrefixExpression(const ASTNode& 
     return PrefixExpression::Convert(fContext, expression.getOperator(), std::move(base));
 }
 
-std::unique_ptr<Expression> IRGenerator::convertField(std::unique_ptr<Expression> base,
-                                                      StringFragment field) {
-    const Type& baseType = base->type();
-    auto fields = baseType.fields();
-    for (size_t i = 0; i < fields.size(); i++) {
-        if (fields[i].fName == field) {
-            return std::unique_ptr<Expression>(new FieldAccess(std::move(base), (int) i));
-        }
-    }
-    this->errorReporter().error(
-            base->fOffset,
-            "type '" + baseType.displayName() + "' does not have a field named '" + field + "'");
-    return nullptr;
-}
-
 // Swizzles are complicated due to constant components. The most difficult case is a mask like
 // '.x1w0'. A naive approach might turn that into 'float4(base.x, 1, base.w, 0)', but that evaluates
 // 'base' twice. We instead group the swizzle mask ('xw') and constants ('1, 0') together and use a
@@ -1979,8 +1948,7 @@ std::unique_ptr<Expression> IRGenerator::convertTypeField(int offset, const Type
     if (result) {
         const Variable& v = *result->as<VariableReference>().variable();
         SkASSERT(v.initialValue());
-        result = std::make_unique<IntLiteral>(offset, v.initialValue()->as<IntLiteral>().value(),
-                                              &type);
+        result = IntLiteral::Make(offset, v.initialValue()->as<IntLiteral>().value(), &type);
     } else {
         this->errorReporter().error(
                 offset, "type '" + type.name() + "' does not contain enumerator '" + field + "'");
@@ -2019,44 +1987,7 @@ std::unique_ptr<Expression> IRGenerator::convertIndexExpression(const ASTNode& i
     if (!converted) {
         return nullptr;
     }
-    return this->convertIndex(std::move(base), std::move(converted));
-}
-
-std::unique_ptr<Expression> IRGenerator::convertIndex(std::unique_ptr<Expression> base,
-                                                      std::unique_ptr<Expression> index) {
-    // Convert an index expression with an expression inside of it: `arr[a * 3]`.
-    const Type& baseType = base->type();
-    if (!baseType.isArray() && !baseType.isMatrix() && !baseType.isVector()) {
-        this->errorReporter().error(base->fOffset,
-                                    "expected array, but found '" + baseType.displayName() + "'");
-        return nullptr;
-    }
-    if (!index->type().isInteger()) {
-        index = this->coerce(std::move(index), *fContext.fTypes.fInt);
-        if (!index) {
-            return nullptr;
-        }
-    }
-    // Perform compile-time bounds checking on constant indices.
-    if (index->is<IntLiteral>()) {
-        SKSL_INT indexValue = index->as<IntLiteral>().value();
-
-        const int upperBound = (baseType.isArray() && baseType.columns() == Type::kUnsizedArray)
-                                       ? INT_MAX
-                                       : baseType.columns();
-        if (indexValue < 0 || indexValue >= upperBound) {
-            this->errorReporter().error(base->fOffset, "index " + to_string(indexValue) +
-                                                       " out of range for '" +
-                                                       baseType.displayName() + "'");
-            return nullptr;
-        }
-        // Constant array indexes on vectors can be converted to swizzles: `myHalf4.z`.
-        // (Using a swizzle gives our optimizer a bit more to work with, compared to array indices.)
-        if (baseType.isVector()) {
-            return Swizzle::Make(fContext, std::move(base), ComponentArray{(int8_t)indexValue});
-        }
-    }
-    return std::make_unique<IndexExpression>(fContext, std::move(base), std::move(index));
+    return IndexExpression::Convert(fContext, std::move(base), std::move(converted));
 }
 
 std::unique_ptr<Expression> IRGenerator::convertCallExpression(const ASTNode& callNode) {
@@ -2082,17 +2013,15 @@ std::unique_ptr<Expression> IRGenerator::convertFieldExpression(const ASTNode& f
     if (!base) {
         return nullptr;
     }
-    StringFragment field = fieldNode.getString();
+    const StringFragment& field = fieldNode.getString();
     const Type& baseType = base->type();
     if (baseType == *fContext.fTypes.fSkCaps) {
         return Setting::Convert(fContext, fieldNode.fOffset, field);
     }
-    switch (baseType.typeKind()) {
-        case Type::TypeKind::kStruct:
-            return this->convertField(std::move(base), field);
-        default:
-            return this->convertSwizzle(std::move(base), field);
+    if (baseType.isStruct()) {
+        return FieldAccess::Convert(fContext, std::move(base), field);
     }
+    return this->convertSwizzle(std::move(base), field);
 }
 
 std::unique_ptr<Expression> IRGenerator::convertScopeExpression(const ASTNode& scopeNode) {
@@ -2104,7 +2033,7 @@ std::unique_ptr<Expression> IRGenerator::convertScopeExpression(const ASTNode& s
         this->errorReporter().error(scopeNode.fOffset, "'::' must follow a type name");
         return nullptr;
     }
-    StringFragment member = scopeNode.getString();
+    const StringFragment& member = scopeNode.getString();
     return this->convertTypeField(base->fOffset, base->as<TypeReference>().value(), member);
 }
 

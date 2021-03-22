@@ -162,7 +162,7 @@ void GrVkPipelineStateBuilder::storeShadersInCache(const SkSL::String shaders[],
     // to the key right after the base key.
     sk_sp<SkData> key = SkData::MakeWithoutCopy(this->desc().asKey(),
                                                 this->desc().initialKeyLength()+4);
-    const SkString& description = this->desc().description();
+    SkString description = GrProgramDesc::Describe(fRenderTarget, fProgramInfo, *this->caps());
 
     sk_sp<SkData> data = GrPersistentCacheUtils::PackCachedShaders(isSkSL ? kSKSL_Tag : kSPIRV_Tag,
                                                                    shaders,
@@ -174,7 +174,7 @@ void GrVkPipelineStateBuilder::storeShadersInCache(const SkSL::String shaders[],
 GrVkPipelineState* GrVkPipelineStateBuilder::finalize(const GrProgramDesc& desc,
                                                       VkRenderPass compatibleRenderPass,
                                                       bool overrideSubpassForResolveLoad) {
-    TRACE_EVENT0("skia.gpu", TRACE_FUNC);
+    TRACE_EVENT0("skia.shaders", TRACE_FUNC);
 
     VkDescriptorSetLayout dsLayout[GrVkUniformHandler::kDescSetCount];
     VkShaderModule shaderModules[kGrShaderTypeCount] = { VK_NULL_HANDLE,
@@ -212,6 +212,9 @@ GrVkPipelineState* GrVkPipelineStateBuilder::finalize(const GrProgramDesc& desc,
                         this->gpu()->getContext()->priv().options().fSharpenMipmappedTextures;
     settings.fRTHeightOffset = fUniformHandler.getRTHeightOffset();
     settings.fUsePushConstants = usePushConstants;
+    if (fFS.fForceHighPrecision) {
+        settings.fForceHighPrecision = true;
+    }
     SkASSERT(!this->fragColorIsInOut());
 
     sk_sp<SkData> cached;

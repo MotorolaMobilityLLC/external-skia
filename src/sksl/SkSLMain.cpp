@@ -204,12 +204,6 @@ static bool detect_shader_settings(const SkSL::String& text,
                     static auto s_version450CoreCaps = Factory::Version450Core();
                     *caps = s_version450CoreCaps.get();
                 }
-                if (settingsText.consumeSuffix(" NoControlFlowAnalysis")) {
-                    settings->fControlFlowAnalysis = false;
-                }
-                if (settingsText.consumeSuffix(" NoDeadCodeElimination")) {
-                    settings->fDeadCodeElimination = false;
-                }
                 if (settingsText.consumeSuffix(" FlipY")) {
                     settings->fFlipY = true;
                 }
@@ -413,9 +407,6 @@ ResultCode processCommand(std::vector<SkSL::String>& args) {
 
                         String declareUniform(const SkSL::VarDeclaration* decl) override {
                             fOutput += decl->description();
-                            if (decl->var().type().name() == "fragmentProcessor") {
-                                fChildNames.push_back(decl->var().name());
-                            }
                             return decl->var().name();
                         }
 
@@ -434,16 +425,19 @@ ResultCode processCommand(std::vector<SkSL::String>& args) {
                         }
 
                         String sampleChild(int index, String coords) override {
-                            return String::printf("sample(%s%s%s)", fChildNames[index].c_str(),
-                                                  coords.empty() ? "" : ", ", coords.c_str());
+                            return String::printf("sample(child_%d%s%s)",
+                                                  index,
+                                                  coords.empty() ? "" : ", ",
+                                                  coords.c_str());
                         }
                         String sampleChildWithMatrix(int index, String matrix) override {
-                            return String::printf("sample(%s%s%s)", fChildNames[index].c_str(),
-                                                  matrix.empty() ? "" : ", ", matrix.c_str());
+                            return String::printf("sample(child_%d%s%s)",
+                                                  index,
+                                                  matrix.empty() ? "" : ", ",
+                                                  matrix.c_str());
                         }
 
                         String              fOutput;
-                        std::vector<String> fChildNames;
                     };
                     Callbacks callbacks;
                     SkSL::PipelineStage::ConvertProgram(program, "_coords", &callbacks);

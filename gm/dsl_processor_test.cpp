@@ -13,6 +13,8 @@
 #include "src/gpu/glsl/GrGLSLFragmentShaderBuilder.h"
 #include "src/gpu/ops/GrFillRectOp.h"
 #include "src/sksl/dsl/priv/DSLFPs.h"
+#include "src/sksl/dsl/priv/DSLWriter.h"
+#include "src/sksl/ir/SkSLVariable.h"
 #include "tools/ToolUtils.h"
 
 class SimpleDSLEffect : public GrFragmentProcessor {
@@ -34,14 +36,14 @@ public:
                 StartFragmentProcessor(this, &args);
 
                 // Test for skbug.com/11384
-                Var x(kInt);
-                Declare(x, 1);
+                Var x(kInt, 1);
+                Declare(x);
                 SkASSERT(DSLWriter::Var(x).initialValue()->description() == "1");
 
                 Var blueAlpha(kUniform_Modifier, kHalf2);
                 fBlueAlphaUniform = VarUniformHandle(blueAlpha);
-                Var coords(kFloat4);
-                Declare(coords, sk_FragCoord());
+                Var coords(kFloat4, sk_FragCoord());
+                Declare(coords);
                 Return(Half4(Swizzle(coords, X, Y) / 100, blueAlpha));
                 EndFragmentProcessor();
             }

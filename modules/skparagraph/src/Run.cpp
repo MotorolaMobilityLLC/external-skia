@@ -341,19 +341,21 @@ PlaceholderStyle* Run::placeholderStyle() const {
     }
 }
 
-Run* Cluster::run() const {
+Run* Cluster::runOrNull() const {
     if (fRunIndex >= fOwner->runs().size()) {
         return nullptr;
     }
     return &fOwner->run(fRunIndex);
 }
 
-SkFont Cluster::font() const {
-    return fOwner->run(fRunIndex).font();
+Run& Cluster::run() const {
+    SkASSERT(fRunIndex < fOwner->runs().size());
+    return fOwner->run(fRunIndex);
 }
 
-bool Cluster::isHardBreak() const {
-    return fOwner->codeUnitHasProperty(fTextRange.end, CodeUnitFlags::kHardLineBreakBefore);
+SkFont Cluster::font() const {
+    SkASSERT(fRunIndex < fOwner->runs().size());
+    return fOwner->run(fRunIndex).font();
 }
 
 bool Cluster::isSoftBreak() const {
@@ -383,6 +385,8 @@ Cluster::Cluster(ParagraphImpl* owner,
         , fHalfLetterSpacing(0.0) {
     size_t len = fOwner->getWhitespacesLength(fTextRange);
     fIsWhiteSpaces = (len == this->fTextRange.width());
+    fIsSpaces = fOwner->isSpace(fTextRange);
+    fIsHardBreak = fOwner->codeUnitHasProperty(fTextRange.end, CodeUnitFlags::kHardLineBreakBefore);
 }
 
 }  // namespace textlayout

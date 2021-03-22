@@ -35,13 +35,6 @@ SkImage_GpuBase::SkImage_GpuBase(sk_sp<GrImageContext> context, SkISize size, ui
 
 //////////////////////////////////////////////////////////////////////////////////////////////////
 
-#if GR_TEST_UTILS
-void SkImage_GpuBase::resetContext(sk_sp<GrImageContext> newContext) {
-    SkASSERT(fContext->priv().matches(newContext.get()));
-    fContext = newContext;
-}
-#endif
-
 bool SkImage_GpuBase::ValidateBackendTexture(const GrCaps* caps, const GrBackendTexture& tex,
                                              GrColorType grCT, SkColorType ct, SkAlphaType at,
                                              sk_sp<SkColorSpace> cs) {
@@ -266,7 +259,8 @@ sk_sp<GrTextureProxy> SkImage_GpuBase::MakePromiseImageLazyProxy(
             // In the future the GrSurface class hierarchy refactoring should eliminate this
             // difficulty by removing the virtual inheritance.
             if (fTexture) {
-                SkMessageBus<GrTextureFreedMessage>::Post({fTexture, fTextureContextID});
+                GrTextureFreedMessage msg { fTexture, fTextureContextID };
+                SkMessageBus<GrTextureFreedMessage, GrDirectContext::DirectContextID>::Post(msg);
             }
         }
 
@@ -320,7 +314,7 @@ sk_sp<GrTextureProxy> SkImage_GpuBase::MakePromiseImageLazyProxy(
             // our destructor.
             auto dContext = fTexture->getContext();
             dContext->priv().getResourceCache()->insertDelayedTextureUnref(fTexture);
-            fTextureContextID = dContext->priv().contextID();
+            fTextureContextID = dContext->directContextID();
             return {std::move(tex), kReleaseCallbackOnInstantiation, kKeySyncMode};
         }
 
@@ -328,7 +322,7 @@ sk_sp<GrTextureProxy> SkImage_GpuBase::MakePromiseImageLazyProxy(
         PromiseImageTextureFulfillProc fFulfillProc;
         sk_sp<GrRefCntedCallback> fReleaseHelper;
         GrTexture* fTexture = nullptr;
-        uint32_t fTextureContextID = SK_InvalidUniqueID;
+        GrDirectContext::DirectContextID fTextureContextID;
         bool fFulfillProcFailed = false;
     } callback(fulfillProc, std::move(releaseHelper));
 

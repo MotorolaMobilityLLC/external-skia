@@ -10,13 +10,9 @@ fragment Outputs fragmentMain(Inputs _in [[stage_in]], bool _frontFacing [[front
     Outputs _out;
     (void)_out;
     float x;
-    switch (1) {
-        case 0:
-            x = 0.0;
-            break;
-        default:
-            x = 1.0;
-            discard_fragment();
+    {
+        x = 1.0;
+        discard_fragment();
     }
     _out.sk_FragColor = float4(x);
     return _out;

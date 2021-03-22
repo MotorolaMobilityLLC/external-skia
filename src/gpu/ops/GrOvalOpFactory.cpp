@@ -152,6 +152,7 @@ private:
             }
 
             // setup pass through color
+            fragBuilder->codeAppendf("half4 %s;", args.fOutputColor);
             varyingHandler->addPassThroughAttribute(cgp.fInColor, args.fOutputColor);
 
             // Setup position
@@ -199,21 +200,19 @@ private:
                             capRadius.fsIn(), capRadius.fsIn());
                 }
             }
-            fragBuilder->codeAppendf("%s = half4(edgeAlpha);", args.fOutputCoverage);
+            fragBuilder->codeAppendf("half4 %s = half4(edgeAlpha);", args.fOutputCoverage);
         }
 
         static void GenKey(const GrGeometryProcessor& gp,
                            const GrShaderCaps&,
                            GrProcessorKeyBuilder* b) {
             const CircleGeometryProcessor& cgp = gp.cast<CircleGeometryProcessor>();
-            uint32_t key;
-            key = cgp.fStroke ? 0x01 : 0x0;
-            key |= cgp.fInClipPlane.isInitialized() ? 0x02 : 0x0;
-            key |= cgp.fInIsectPlane.isInitialized() ? 0x04 : 0x0;
-            key |= cgp.fInUnionPlane.isInitialized() ? 0x08 : 0x0;
-            key |= cgp.fInRoundCapCenters.isInitialized() ? 0x10 : 0x0;
-            key |= (ComputeMatrixKey(cgp.fLocalMatrix) << 16);
-            b->add32(key);
+            b->addBool(cgp.fStroke,                                     "stroked");
+            b->addBool(cgp.fInClipPlane.isInitialized(),                "clipPlane");
+            b->addBool(cgp.fInIsectPlane.isInitialized(),               "isectPlane");
+            b->addBool(cgp.fInUnionPlane.isInitialized(),               "unionPlane");
+            b->addBool(cgp.fInRoundCapCenters.isInitialized(),          "roundCapCenters");
+            b->addBits(kMatrixKeyBits, ComputeMatrixKey(cgp.fLocalMatrix), "localMatrixType");
         }
 
         void setData(const GrGLSLProgramDataManager& pdman,
@@ -383,6 +382,7 @@ private:
             fragBuilder->codeAppendf("half lastIntervalLength = %s;", lastIntervalLength.fsIn());
 
             // setup pass through color
+            fragBuilder->codeAppendf("half4 %s;", args.fOutputColor);
             varyingHandler->addPassThroughAttribute(
                     bcscgp.fInColor, args.fOutputColor,
                     GrGLSLVaryingHandler::Interpolation::kCanBeFlat);
@@ -464,7 +464,7 @@ private:
                     edgeAlpha *= dashAlpha;
             )", fnName.c_str(), fnName.c_str(), fnName.c_str(), fnName.c_str(), fnName.c_str(),
                 fnName.c_str());
-            fragBuilder->codeAppendf("%s = half4(edgeAlpha);", args.fOutputCoverage);
+            fragBuilder->codeAppendf("half4 %s = half4(edgeAlpha);", args.fOutputCoverage);
         }
 
         static void GenKey(const GrGeometryProcessor& gp,
@@ -472,7 +472,7 @@ private:
                            GrProcessorKeyBuilder* b) {
             const ButtCapDashedCircleGeometryProcessor& bcscgp =
                     gp.cast<ButtCapDashedCircleGeometryProcessor>();
-            b->add32(ComputeMatrixKey(bcscgp.fLocalMatrix));
+            b->addBits(kMatrixKeyBits, ComputeMatrixKey(bcscgp.fLocalMatrix), "localMatrixType");
         }
 
         void setData(const GrGLSLProgramDataManager& pdman,
@@ -582,6 +582,7 @@ private:
 
             GrGLSLFPFragmentBuilder* fragBuilder = args.fFragBuilder;
             // setup pass through color
+            fragBuilder->codeAppendf("half4 %s;", args.fOutputColor);
             varyingHandler->addPassThroughAttribute(egp.fInColor, args.fOutputColor);
 
             // Setup position
@@ -653,16 +654,15 @@ private:
                 fragBuilder->codeAppend("edgeAlpha *= saturate(0.5+test*invlen);");
             }
 
-            fragBuilder->codeAppendf("%s = half4(half(edgeAlpha));", args.fOutputCoverage);
+            fragBuilder->codeAppendf("half4 %s = half4(half(edgeAlpha));", args.fOutputCoverage);
         }
 
         static void GenKey(const GrGeometryProcessor& gp,
                            const GrShaderCaps&,
                            GrProcessorKeyBuilder* b) {
             const EllipseGeometryProcessor& egp = gp.cast<EllipseGeometryProcessor>();
-            uint32_t key = egp.fStroke ? 0x1 : 0x0;
-            key |= ComputeMatrixKey(egp.fLocalMatrix) << 1;
-            b->add32(key);
+            b->addBool(egp.fStroke, "stroked");
+            b->addBits(kMatrixKeyBits, ComputeMatrixKey(egp.fLocalMatrix), "localMatrixType");
         }
 
         void setData(const GrGLSLProgramDataManager& pdman,
@@ -779,6 +779,7 @@ private:
             vertBuilder->codeAppendf("%s = %s;", offsets1.vsOut(), diegp.fInEllipseOffsets1.name());
 
             GrGLSLFPFragmentBuilder* fragBuilder = args.fFragBuilder;
+            fragBuilder->codeAppendf("half4 %s;", args.fOutputColor);
             varyingHandler->addPassThroughAttribute(diegp.fInColor, args.fOutputColor);
 
             // Setup position
@@ -846,16 +847,15 @@ private:
                 fragBuilder->codeAppend("edgeAlpha *= saturate(0.5+test*invlen);");
             }
 
-            fragBuilder->codeAppendf("%s = half4(half(edgeAlpha));", args.fOutputCoverage);
+            fragBuilder->codeAppendf("half4 %s = half4(half(edgeAlpha));", args.fOutputCoverage);
         }
 
         static void GenKey(const GrGeometryProcessor& gp,
                            const GrShaderCaps&,
                            GrProcessorKeyBuilder* b) {
             const DIEllipseGeometryProcessor& diegp = gp.cast<DIEllipseGeometryProcessor>();
-            uint32_t key = static_cast<uint32_t>(diegp.fStyle);
-            key |= ComputeMatrixKey(diegp.fViewMatrix) << 10;
-            b->add32(key);
+            b->addBits(2, static_cast<uint32_t>(diegp.fStyle), "style");
+            b->addBits(kMatrixKeyBits, ComputeMatrixKey(diegp.fViewMatrix), "viewMatrixType");
         }
 
         void setData(const GrGLSLProgramDataManager& pdman,

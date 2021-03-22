@@ -5,10 +5,10 @@
  * found in the LICENSE file.
  */
 
-#include "src/sksl/dsl/DSLCore.h"
+#include "include/sksl/DSLCore.h"
 
+#include "include/private/SkSLDefines.h"
 #include "src/sksl/SkSLCompiler.h"
-#include "src/sksl/SkSLDefines.h"
 #include "src/sksl/SkSLIRGenerator.h"
 #include "src/sksl/dsl/priv/DSLWriter.h"
 #include "src/sksl/ir/SkSLBreakStatement.h"
@@ -59,33 +59,30 @@ public:
 
         // in C++17, we could just do:
         // (argArray.push_back(args.release()), ...);
-        int unused[] = {0, (DSLWriter::Ignore(argArray.push_back(args.release())), 0)...};
+        int unused[] = {0, (static_cast<void>(argArray.push_back(args.release())), 0)...};
         static_cast<void>(unused);
 
         return ir.call(/*offset=*/-1, ir.convertIdentifier(-1, name), std::move(argArray));
     }
 
     static DSLStatement Break() {
-        return std::unique_ptr<SkSL::Statement>(new SkSL::BreakStatement(/*offset=*/-1));
+        return SkSL::BreakStatement::Make(/*offset=*/-1);
     }
 
     static DSLStatement Continue() {
-        return std::unique_ptr<SkSL::Statement>(new SkSL::ContinueStatement(/*offset=*/-1));
+        return SkSL::ContinueStatement::Make(/*offset=*/-1);
     }
 
-    static DSLPossibleStatement Declare(DSLVar& var, DSLExpression initialValue) {
-        if (var.fConstVar) {
-            DSLWriter::ReportError("Variable already declared");
-            return DSLPossibleStatement(nullptr);
+    static DSLStatement Declare(DSLVar& var, PositionInfo pos) {
+        if (var.fDeclared) {
+            DSLWriter::ReportError("error: variable has already been declared\n", &pos);
         }
-        SkASSERT(var.fVar);
-        var.fConstVar = var.fVar.get();
-        return DSLWriter::IRGenerator().convertVarDeclaration(std::move(var.fVar),
-                                                              initialValue.release());
+        var.fDeclared = true;
+        return std::move(var.fDeclaration);
     }
 
     static DSLStatement Discard() {
-        return std::unique_ptr<SkSL::Statement>(new SkSL::DiscardStatement(/*offset=*/-1));
+        return SkSL::DiscardStatement::Make(/*offset=*/-1);
     }
 
     static DSLPossibleStatement Do(DSLStatement stmt, DSLExpression test) {
@@ -105,16 +102,11 @@ public:
     }
 
     static DSLPossibleStatement Return(DSLExpression value, PositionInfo pos) {
-        // note that because Return is called before the function in which it resides exists, at
+        // Note that because Return is called before the function in which it resides exists, at
         // this point we do not know the function's return type. We therefore do not check for
         // errors, or coerce the value to the correct type, until the return statement is actually
-        // added to a function
-        std::unique_ptr<SkSL::Expression> expr = value.release();
-        if (expr) {
-            return std::unique_ptr<SkSL::Statement>(new ReturnStatement(std::move(expr)));
-        } else {
-            return std::unique_ptr<SkSL::Statement>(new ReturnStatement(/*offset=*/-1));
-        }
+        // added to a function. (This is done in IRGenerator::finalizeFunction.)
+        return SkSL::ReturnStatement::Make(/*offset=*/-1, value.release());
     }
 
     static DSLExpression Swizzle(DSLExpression base, SkSL::SwizzleComponent::Type a,
@@ -160,6 +152,11 @@ public:
                                           ifTrue.release(), ifFalse.release());
     }
 
+    static DSLPossibleStatement Switch(DSLExpression value, SkSL::ExpressionArray values,
+                                       SkTArray<StatementArray> statements) {
+        return DSLWriter::ConvertSwitch(value.release(), std::move(values), std::move(statements));
+    }
+
     static DSLPossibleStatement While(DSLExpression test, DSLStatement stmt) {
         return ForStatement::ConvertWhile(DSLWriter::Context(), /*offset=*/-1, test.release(),
                                           stmt.release(), DSLWriter::SymbolTable());
@@ -182,8 +179,8 @@ DSLStatement Continue() {
     return DSLCore::Continue();
 }
 
-DSLStatement Declare(DSLVar& var, DSLExpression initialValue, PositionInfo pos) {
-    return DSLStatement(DSLCore::Declare(var, std::move(initialValue)), pos);
+DSLStatement Declare(DSLVar& var, PositionInfo pos) {
+    return DSLCore::Declare(var, pos);
 }
 
 DSLStatement Discard() {
@@ -212,6 +209,11 @@ DSLExpression Select(DSLExpression test, DSLExpression ifTrue, DSLExpression ifF
                      PositionInfo pos) {
     return DSLExpression(DSLCore::Select(std::move(test), std::move(ifTrue), std::move(ifFalse)),
                          pos);
+}
+
+DSLPossibleStatement Switch(DSLExpression value, SkSL::ExpressionArray values,
+                            SkTArray<StatementArray> statements) {
+    return DSLCore::Switch(std::move(value), std::move(values), std::move(statements));
 }
 
 DSLStatement While(DSLExpression test, DSLStatement stmt, PositionInfo pos) {

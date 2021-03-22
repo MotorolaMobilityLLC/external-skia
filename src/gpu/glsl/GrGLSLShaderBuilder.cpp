@@ -7,13 +7,13 @@
 
 #include "src/gpu/glsl/GrGLSLShaderBuilder.h"
 
+#include "include/sksl/DSL.h"
 #include "src/gpu/GrShaderCaps.h"
 #include "src/gpu/GrShaderVar.h"
 #include "src/gpu/GrSwizzle.h"
 #include "src/gpu/glsl/GrGLSLBlend.h"
 #include "src/gpu/glsl/GrGLSLColorSpaceXformHelper.h"
 #include "src/gpu/glsl/GrGLSLProgramBuilder.h"
-#include "src/sksl/dsl/DSL.h"
 #include "src/sksl/dsl/priv/DSLWriter.h"
 #include "src/sksl/ir/SkSLVarDeclarations.h"
 
@@ -50,11 +50,8 @@ SkString GrGLSLShaderBuilder::getMangledFunctionName(const char* baseName) {
 
 void GrGLSLShaderBuilder::appendFunctionDecl(GrSLType returnType,
                                              const char* mangledName,
-                                             SkSpan<const GrShaderVar> args,
-                                             bool forceInline) {
-    this->functions().appendf("%s%s %s(", forceInline ? "inline " : "",
-                                          GrGLSLTypeString(returnType),
-                                          mangledName);
+                                             SkSpan<const GrShaderVar> args) {
+    this->functions().appendf("%s %s(", GrGLSLTypeString(returnType), mangledName);
     for (size_t i = 0; i < args.size(); ++i) {
         if (i > 0) {
             this->functions().append(", ");
@@ -68,9 +65,8 @@ void GrGLSLShaderBuilder::appendFunctionDecl(GrSLType returnType,
 void GrGLSLShaderBuilder::emitFunction(GrSLType returnType,
                                        const char* mangledName,
                                        SkSpan<const GrShaderVar> args,
-                                       const char* body,
-                                       bool forceInline) {
-    this->appendFunctionDecl(returnType, mangledName, args, forceInline);
+                                       const char* body) {
+    this->appendFunctionDecl(returnType, mangledName, args);
     this->functions().appendf(" {\n"
                               "%s"
                               "}\n\n", body);
@@ -84,9 +80,8 @@ void GrGLSLShaderBuilder::emitFunction(const char* declaration, const char* body
 
 void GrGLSLShaderBuilder::emitFunctionPrototype(GrSLType returnType,
                                                 const char* mangledName,
-                                                SkSpan<const GrShaderVar> args,
-                                                bool forceInline) {
-    this->appendFunctionDecl(returnType, mangledName, args, forceInline);
+                                                SkSpan<const GrShaderVar> args) {
+    this->appendFunctionDecl(returnType, mangledName, args);
     this->functions().append(";\n");
 }
 

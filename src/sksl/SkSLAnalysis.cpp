@@ -7,20 +7,20 @@
 
 #include "src/sksl/SkSLAnalysis.h"
 
+#include "include/private/SkSLModifiers.h"
+#include "include/private/SkSLProgramElement.h"
 #include "include/private/SkSLSampleUsage.h"
+#include "include/private/SkSLStatement.h"
 #include "src/sksl/SkSLCompiler.h"
 #include "src/sksl/SkSLErrorReporter.h"
 #include "src/sksl/ir/SkSLExpression.h"
 #include "src/sksl/ir/SkSLProgram.h"
-#include "src/sksl/ir/SkSLProgramElement.h"
-#include "src/sksl/ir/SkSLStatement.h"
 
 // ProgramElements
 #include "src/sksl/ir/SkSLEnum.h"
 #include "src/sksl/ir/SkSLExtension.h"
 #include "src/sksl/ir/SkSLFunctionDefinition.h"
 #include "src/sksl/ir/SkSLInterfaceBlock.h"
-#include "src/sksl/ir/SkSLModifiers.h"
 #include "src/sksl/ir/SkSLSection.h"
 #include "src/sksl/ir/SkSLVarDeclarations.h"
 
@@ -184,6 +184,33 @@ class ProgramUsageVisitor : public ProgramVisitor {
 public:
     ProgramUsageVisitor(ProgramUsage* usage, int delta) : fUsage(usage), fDelta(delta) {}
 
+    bool visitProgramElement(const ProgramElement& pe) override {
+        if (pe.is<FunctionDefinition>()) {
+            for (const Variable* param : pe.as<FunctionDefinition>().declaration().parameters()) {
+                // Ensure function-parameter variables exist in the variable usage map. They aren't
+                // otherwise declared, but ProgramUsage::get() should be able to find them, even if
+                // they are unread and unwritten.
+                fUsage->fVariableCounts[param];
+            }
+        }
+        return INHERITED::visitProgramElement(pe);
+    }
+
+    bool visitStatement(const Statement& s) override {
+        if (s.is<VarDeclaration>()) {
+            // Add all declared variables to the usage map (even if never otherwise accessed).
+            const VarDeclaration& vd = s.as<VarDeclaration>();
+            ProgramUsage::VariableCounts& counts = fUsage->fVariableCounts[&vd.var()];
+            counts.fDeclared += fDelta;
+            SkASSERT(counts.fDeclared >= 0);
+            if (vd.value()) {
+                // The initial-value expression, when present, counts as a write.
+                counts.fWrite += fDelta;
+            }
+        }
+        return INHERITED::visitStatement(s);
+    }
+
     bool visitExpression(const Expression& e) override {
         if (e.is<FunctionCall>()) {
             const FunctionDeclaration* f = &e.as<FunctionCall>().function();
@@ -336,6 +363,7 @@ public:
     bool visitStatement(const Statement& stmt) override {
         switch (stmt.kind()) {
             case Statement::Kind::kBlock:
+            case Statement::Kind::kSwitchCase:
                 return INHERITED::visitStatement(stmt);
 
             case Statement::Kind::kReturn:
@@ -391,6 +419,144 @@ public:
     using INHERITED = ProgramVisitor;
 };
 
+class ReturnsOnAllPathsVisitor : public ProgramVisitor {
+public:
+    bool visitExpression(const Expression& expr) override {
+        // We can avoid processing expressions entirely.
+        return false;
+    }
+
+    bool visitStatement(const Statement& stmt) override {
+        switch (stmt.kind()) {
+            // Returns, breaks, or continues will stop the scan, so only one of these should ever be
+            // true.
+            case Statement::Kind::kReturn:
+                fFoundReturn = true;
+                return true;
+
+            case Statement::Kind::kBreak:
+                fFoundBreak = true;
+                return true;
+
+            case Statement::Kind::kContinue:
+                fFoundContinue = true;
+                return true;
+
+            case Statement::Kind::kIf: {
+                const IfStatement& i = stmt.as<IfStatement>();
+                ReturnsOnAllPathsVisitor trueVisitor;
+                ReturnsOnAllPathsVisitor falseVisitor;
+                trueVisitor.visitStatement(*i.ifTrue());
+                if (i.ifFalse()) {
+                    falseVisitor.visitStatement(*i.ifFalse());
+                }
+                // If either branch leads to a break or continue, we report the entire if as
+                // containing a break or continue, since we don't know which side will be reached.
+                fFoundBreak    = (trueVisitor.fFoundBreak    || falseVisitor.fFoundBreak);
+                fFoundContinue = (trueVisitor.fFoundContinue || falseVisitor.fFoundContinue);
+                // On the other hand, we only want to report returns that definitely happen, so we
+                // require those to be found on both sides.
+                fFoundReturn   = (trueVisitor.fFoundReturn   && falseVisitor.fFoundReturn);
+                return fFoundBreak || fFoundContinue || fFoundReturn;
+            }
+            case Statement::Kind::kFor: {
+                const ForStatement& f = stmt.as<ForStatement>();
+                // We assume a for/while loop runs for at least one iteration; this isn't strictly
+                // guaranteed, but it's better to be slightly over-permissive here than to fail on
+                // reasonable code.
+                ReturnsOnAllPathsVisitor forVisitor;
+                forVisitor.visitStatement(*f.statement());
+                // A for loop that contains a break or continue is safe; it won't exit the entire
+                // function, just the loop. So we disregard those signals.
+                fFoundReturn = forVisitor.fFoundReturn;
+                return fFoundReturn;
+            }
+            case Statement::Kind::kDo: {
+                const DoStatement& d = stmt.as<DoStatement>();
+                // Do-while blocks are always entered at least once.
+                ReturnsOnAllPathsVisitor doVisitor;
+                doVisitor.visitStatement(*d.statement());
+                // A do-while loop that contains a break or continue is safe; it won't exit the
+                // entire function, just the loop. So we disregard those signals.
+                fFoundReturn = doVisitor.fFoundReturn;
+                return fFoundReturn;
+            }
+            case Statement::Kind::kBlock:
+                // Blocks are definitely entered and don't imply any additional control flow.
+                // If the block contains a break, continue or return, we want to keep that.
+                return INHERITED::visitStatement(stmt);
+
+            case Statement::Kind::kSwitch: {
+                // Switches are the most complex control flow we need to deal with; fortunately we
+                // already have good primitives for dissecting them. We need to verify that:
+                // - a default case exists, so that every possible input value is covered
+                // - every switch-case either (a) returns unconditionally, or
+                //                            (b) falls through to another case that does
+                const SwitchStatement& s = stmt.as<SwitchStatement>();
+                bool foundDefault = false;
+                bool fellThrough = false;
+                for (const std::unique_ptr<Statement>& stmt : s.cases()) {
+                    // The default case is indicated by a null value. A switch without a default
+                    // case cannot definitively return, as its value might not be in the cases list.
+                    const SwitchCase& sc = stmt->as<SwitchCase>();
+                    if (!sc.value()) {
+                        foundDefault = true;
+                    }
+                    // Scan this switch-case for any exit (break, continue or return).
+                    ReturnsOnAllPathsVisitor caseVisitor;
+                    caseVisitor.visitStatement(sc);
+
+                    // If we found a break or continue, whether conditional or not, this switch case
+                    // can't be called an unconditional return. Switches absorb breaks but not
+                    // continues.
+                    if (caseVisitor.fFoundContinue) {
+                        fFoundContinue = true;
+                        return false;
+                    }
+                    if (caseVisitor.fFoundBreak) {
+                        return false;
+                    }
+                    // We just confirmed that there weren't any breaks or continues. If we didn't
+                    // find an unconditional return either, the switch is considered fallen-through.
+                    // (There might be a conditional return, but that doesn't count.)
+                    fellThrough = !caseVisitor.fFoundReturn;
+                }
+
+                // If we didn't find a default case, or the very last case fell through, this switch
+                // doesn't meet our criteria.
+                if (fellThrough || !foundDefault) {
+                    return false;
+                }
+
+                // We scanned the entire switch, found a default case, and every section either fell
+                // through or contained an unconditional return.
+                fFoundReturn = true;
+                return true;
+            }
+
+            case Statement::Kind::kSwitchCase:
+                // Recurse into the switch-case.
+                return INHERITED::visitStatement(stmt);
+
+            case Statement::Kind::kDiscard:
+            case Statement::Kind::kExpression:
+            case Statement::Kind::kInlineMarker:
+            case Statement::Kind::kNop:
+            case Statement::Kind::kVarDeclaration:
+                // None of these statements could contain a return.
+                break;
+        }
+
+        return false;
+    }
+
+    bool fFoundReturn = false;
+    bool fFoundBreak = false;
+    bool fFoundContinue = false;
+
+    using INHERITED = ProgramVisitor;
+};
+
 }  // namespace
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -443,12 +609,9 @@ std::unique_ptr<ProgramUsage> Analysis::GetUsage(const LoadedModule& module) {
 }
 
 ProgramUsage::VariableCounts ProgramUsage::get(const Variable& v) const {
-    VariableCounts result = { 0, v.initialValue() ? 1 : 0 };
-    if (const VariableCounts* counts = fVariableCounts.find(&v)) {
-        result.fRead += counts->fRead;
-        result.fWrite += counts->fWrite;
-    }
-    return result;
+    const VariableCounts* counts = fVariableCounts.find(&v);
+    SkASSERT(counts);
+    return *counts;
 }
 
 bool ProgramUsage::isDead(const Variable& v) const {
@@ -459,7 +622,8 @@ bool ProgramUsage::isDead(const Variable& v) const {
                              Modifiers::kVarying_Flag))) {
         return false;
     }
-    return !counts.fWrite || !counts.fRead;
+    // Consider the variable dead if it's never read and never written (besides the initial-value).
+    return !counts.fRead && (counts.fWrite <= (v.initialValue() ? 1 : 0));
 }
 
 int ProgramUsage::get(const FunctionDeclaration& f) const {
@@ -562,33 +726,53 @@ bool Analysis::IsTrivialExpression(const Expression& expr) {
             IsTrivialExpression(*expr.as<IndexExpression>().base()));
 }
 
-bool Analysis::IsSelfAssignment(const Expression& left, const Expression& right) {
+bool Analysis::IsSameExpressionTree(const Expression& left, const Expression& right) {
     if (left.kind() != right.kind() || left.type() != right.type()) {
         return false;
     }
 
-    // This isn't a fully exhaustive list of expressions that could be involved in a self-
-    // assignment, particularly when arrays are involved; for instance, `x[y+1] = x[y+1]` isn't
-    // detected because we don't look at BinaryExpressions. Since this is intended to be used for
-    // optimization purposes, handling the common cases is sufficient.
+    // This isn't a fully exhaustive list of expressions by any stretch of the imagination; for
+    // instance, `x[y+1] = x[y+1]` isn't detected because we don't look at BinaryExpressions.
+    // Since this is intended to be used for optimization purposes, handling the common cases is
+    // sufficient.
     switch (left.kind()) {
         case Expression::Kind::kIntLiteral:
             return left.as<IntLiteral>().value() == right.as<IntLiteral>().value();
 
+        case Expression::Kind::kFloatLiteral:
+            return left.as<FloatLiteral>().value() == right.as<FloatLiteral>().value();
+
+        case Expression::Kind::kBoolLiteral:
+            return left.as<BoolLiteral>().value() == right.as<BoolLiteral>().value();
+
+        case Expression::Kind::kConstructor: {
+            const Constructor& leftCtor = left.as<Constructor>();
+            const Constructor& rightCtor = right.as<Constructor>();
+            if (leftCtor.arguments().count() != rightCtor.arguments().count()) {
+                return false;
+            }
+            for (int index = 0; index < leftCtor.arguments().count(); ++index) {
+                if (!IsSameExpressionTree(*leftCtor.arguments()[index],
+                                          *rightCtor.arguments()[index])) {
+                    return false;
+                }
+            }
+            return true;
+        }
         case Expression::Kind::kFieldAccess:
             return left.as<FieldAccess>().fieldIndex() == right.as<FieldAccess>().fieldIndex() &&
-                   IsSelfAssignment(*left.as<FieldAccess>().base(),
-                                    *right.as<FieldAccess>().base());
+                   IsSameExpressionTree(*left.as<FieldAccess>().base(),
+                                        *right.as<FieldAccess>().base());
 
         case Expression::Kind::kIndex:
-            return IsSelfAssignment(*left.as<IndexExpression>().index(),
-                                    *right.as<IndexExpression>().index()) &&
-                   IsSelfAssignment(*left.as<IndexExpression>().base(),
-                                    *right.as<IndexExpression>().base());
+            return IsSameExpressionTree(*left.as<IndexExpression>().index(),
+                                        *right.as<IndexExpression>().index()) &&
+                   IsSameExpressionTree(*left.as<IndexExpression>().base(),
+                                        *right.as<IndexExpression>().base());
 
         case Expression::Kind::kSwizzle:
             return left.as<Swizzle>().components() == right.as<Swizzle>().components() &&
-                   IsSelfAssignment(*left.as<Swizzle>().base(), *right.as<Swizzle>().base());
+                   IsSameExpressionTree(*left.as<Swizzle>().base(), *right.as<Swizzle>().base());
 
         case Expression::Kind::kVariableReference:
             return left.as<VariableReference>().variable() ==
@@ -809,6 +993,10 @@ public:
             case Expression::Kind::kFloatLiteral:
                 return false;
 
+            // ... settings can appear in fragment processors; they will resolve when compiled
+            case Expression::Kind::kSetting:
+                return false;
+
             // ... a global or local variable qualified as 'const', excluding function parameters.
             // ... loop indices as defined in section 4. [constant-index-expression]
             case Expression::Kind::kVariableReference: {
@@ -843,7 +1031,6 @@ public:
             case Expression::Kind::kDefined:
             case Expression::Kind::kExternalFunctionReference:
             case Expression::Kind::kFunctionReference:
-            case Expression::Kind::kSetting:
             case Expression::Kind::kTypeReference:
             default:
                 SkDEBUGFAIL("Unexpected expression type");
@@ -905,6 +1092,16 @@ bool Analysis::IsConstantExpression(const Expression& expr) {
     return !visitor.visitExpression(expr);
 }
 
+bool Analysis::CanExitWithoutReturningValue(const FunctionDeclaration& funcDecl,
+                                            const Statement& body) {
+    if (funcDecl.returnType().isVoid()) {
+        return false;
+    }
+    ReturnsOnAllPathsVisitor visitor;
+    visitor.visitStatement(body);
+    return !visitor.fFoundReturn;
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // ProgramVisitor
 
@@ -917,8 +1114,7 @@ bool ProgramVisitor::visit(const Program& program) {
     return false;
 }
 
-template <typename PROG, typename EXPR, typename STMT, typename ELEM>
-bool TProgramVisitor<PROG, EXPR, STMT, ELEM>::visitExpression(EXPR e) {
+template <typename T> bool TProgramVisitor<T>::visitExpression(typename T::Expression& e) {
     switch (e.kind()) {
         case Expression::Kind::kBoolLiteral:
         case Expression::Kind::kDefined:
@@ -934,61 +1130,60 @@ bool TProgramVisitor<PROG, EXPR, STMT, ELEM>::visitExpression(EXPR e) {
 
         case Expression::Kind::kBinary: {
             auto& b = e.template as<BinaryExpression>();
-            return (b.left() && this->visitExpression(*b.left())) ||
-                   (b.right() && this->visitExpression(*b.right()));
+            return (b.left() && this->visitExpressionPtr(b.left())) ||
+                   (b.right() && this->visitExpressionPtr(b.right()));
         }
         case Expression::Kind::kConstructor: {
             auto& c = e.template as<Constructor>();
             for (auto& arg : c.arguments()) {
-                if (this->visitExpression(*arg)) { return true; }
+                if (this->visitExpressionPtr(arg)) { return true; }
             }
             return false;
         }
         case Expression::Kind::kExternalFunctionCall: {
             auto& c = e.template as<ExternalFunctionCall>();
             for (auto& arg : c.arguments()) {
-                if (this->visitExpression(*arg)) { return true; }
+                if (this->visitExpressionPtr(arg)) { return true; }
             }
             return false;
         }
         case Expression::Kind::kFieldAccess:
-            return this->visitExpression(*e.template as<FieldAccess>().base());
+            return this->visitExpressionPtr(e.template as<FieldAccess>().base());
 
         case Expression::Kind::kFunctionCall: {
             auto& c = e.template as<FunctionCall>();
             for (auto& arg : c.arguments()) {
-                if (arg && this->visitExpression(*arg)) { return true; }
+                if (arg && this->visitExpressionPtr(arg)) { return true; }
             }
             return false;
         }
         case Expression::Kind::kIndex: {
             auto& i = e.template as<IndexExpression>();
-            return this->visitExpression(*i.base()) || this->visitExpression(*i.index());
+            return this->visitExpressionPtr(i.base()) || this->visitExpressionPtr(i.index());
         }
         case Expression::Kind::kPostfix:
-            return this->visitExpression(*e.template as<PostfixExpression>().operand());
+            return this->visitExpressionPtr(e.template as<PostfixExpression>().operand());
 
         case Expression::Kind::kPrefix:
-            return this->visitExpression(*e.template as<PrefixExpression>().operand());
+            return this->visitExpressionPtr(e.template as<PrefixExpression>().operand());
 
         case Expression::Kind::kSwizzle: {
             auto& s = e.template as<Swizzle>();
-            return s.base() && this->visitExpression(*s.base());
+            return s.base() && this->visitExpressionPtr(s.base());
         }
 
         case Expression::Kind::kTernary: {
             auto& t = e.template as<TernaryExpression>();
-            return this->visitExpression(*t.test()) ||
-                   (t.ifTrue() && this->visitExpression(*t.ifTrue())) ||
-                   (t.ifFalse() && this->visitExpression(*t.ifFalse()));
+            return this->visitExpressionPtr(t.test()) ||
+                   (t.ifTrue() && this->visitExpressionPtr(t.ifTrue())) ||
+                   (t.ifFalse() && this->visitExpressionPtr(t.ifFalse()));
         }
         default:
             SkUNREACHABLE;
     }
 }
 
-template <typename PROG, typename EXPR, typename STMT, typename ELEM>
-bool TProgramVisitor<PROG, EXPR, STMT, ELEM>::visitStatement(STMT s) {
+template <typename T> bool TProgramVisitor<T>::visitStatement(typename T::Statement& s) {
     switch (s.kind()) {
         case Statement::Kind::kBreak:
         case Statement::Kind::kContinue:
@@ -1000,64 +1195,65 @@ bool TProgramVisitor<PROG, EXPR, STMT, ELEM>::visitStatement(STMT s) {
 
         case Statement::Kind::kBlock:
             for (auto& stmt : s.template as<Block>().children()) {
-                if (stmt && this->visitStatement(*stmt)) {
+                if (stmt && this->visitStatementPtr(stmt)) {
                     return true;
                 }
             }
             return false;
 
+        case Statement::Kind::kSwitchCase: {
+            auto& sc = s.template as<SwitchCase>();
+            if (sc.value() && this->visitExpressionPtr(sc.value())) {
+                return true;
+            }
+            return this->visitStatementPtr(sc.statement());
+        }
         case Statement::Kind::kDo: {
             auto& d = s.template as<DoStatement>();
-            return this->visitExpression(*d.test()) || this->visitStatement(*d.statement());
+            return this->visitExpressionPtr(d.test()) || this->visitStatementPtr(d.statement());
         }
         case Statement::Kind::kExpression:
-            return this->visitExpression(*s.template as<ExpressionStatement>().expression());
+            return this->visitExpressionPtr(s.template as<ExpressionStatement>().expression());
 
         case Statement::Kind::kFor: {
             auto& f = s.template as<ForStatement>();
-            return (f.initializer() && this->visitStatement(*f.initializer())) ||
-                   (f.test() && this->visitExpression(*f.test())) ||
-                   (f.next() && this->visitExpression(*f.next())) ||
-                   this->visitStatement(*f.statement());
+            return (f.initializer() && this->visitStatementPtr(f.initializer())) ||
+                   (f.test() && this->visitExpressionPtr(f.test())) ||
+                   (f.next() && this->visitExpressionPtr(f.next())) ||
+                   this->visitStatementPtr(f.statement());
         }
         case Statement::Kind::kIf: {
             auto& i = s.template as<IfStatement>();
-            return (i.test() && this->visitExpression(*i.test())) ||
-                   (i.ifTrue() && this->visitStatement(*i.ifTrue())) ||
-                   (i.ifFalse() && this->visitStatement(*i.ifFalse()));
+            return (i.test() && this->visitExpressionPtr(i.test())) ||
+                   (i.ifTrue() && this->visitStatementPtr(i.ifTrue())) ||
+                   (i.ifFalse() && this->visitStatementPtr(i.ifFalse()));
         }
         case Statement::Kind::kReturn: {
             auto& r = s.template as<ReturnStatement>();
-            return r.expression() && this->visitExpression(*r.expression());
+            return r.expression() && this->visitExpressionPtr(r.expression());
         }
         case Statement::Kind::kSwitch: {
             auto& sw = s.template as<SwitchStatement>();
-            if (this->visitExpression(*sw.value())) {
+            if (this->visitExpressionPtr(sw.value())) {
                 return true;
             }
-            for (const auto& c : sw.cases()) {
-                if (c->value() && this->visitExpression(*c->value())) {
+            for (auto& c : sw.cases()) {
+                if (this->visitStatementPtr(c)) {
                     return true;
-                }
-                for (auto& st : c->statements()) {
-                    if (st && this->visitStatement(*st)) {
-                        return true;
-                    }
                 }
             }
             return false;
         }
         case Statement::Kind::kVarDeclaration: {
             auto& v = s.template as<VarDeclaration>();
-            return v.value() && this->visitExpression(*v.value());
+            return v.value() && this->visitExpressionPtr(v.value());
         }
         default:
             SkUNREACHABLE;
     }
 }
 
-template <typename PROG, typename EXPR, typename STMT, typename ELEM>
-bool TProgramVisitor<PROG, EXPR, STMT, ELEM>::visitProgramElement(ELEM pe) {
+template <typename T> bool TProgramVisitor<T>::visitProgramElement(typename T::ProgramElement& pe) {
     switch (pe.kind()) {
         case ProgramElement::Kind::kEnum:
         case ProgramElement::Kind::kExtension:
@@ -1070,21 +1266,17 @@ bool TProgramVisitor<PROG, EXPR, STMT, ELEM>::visitProgramElement(ELEM pe) {
             return false;
 
         case ProgramElement::Kind::kFunction:
-            return this->visitStatement(*pe.template as<FunctionDefinition>().body());
+            return this->visitStatementPtr(pe.template as<FunctionDefinition>().body());
 
         case ProgramElement::Kind::kGlobalVar:
-            if (this->visitStatement(*pe.template as<GlobalVarDeclaration>().declaration())) {
-                return true;
-            }
-            return false;
+            return this->visitStatementPtr(pe.template as<GlobalVarDeclaration>().declaration());
 
         default:
             SkUNREACHABLE;
     }
 }
 
-template class TProgramVisitor<const Program&, const Expression&,
-                               const Statement&, const ProgramElement&>;
-template class TProgramVisitor<Program&, Expression&, Statement&, ProgramElement&>;
+template class TProgramVisitor<ProgramVisitorTypes>;
+template class TProgramVisitor<ProgramWriterTypes>;
 
 }  // namespace SkSL

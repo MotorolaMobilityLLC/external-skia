@@ -248,7 +248,8 @@ public:
     }
 
     bool isWhitespaces() const { return fIsWhiteSpaces; }
-    bool isHardBreak() const;
+    bool isSpaces() const { return fIsSpaces; }
+    bool isHardBreak() const { return fIsHardBreak; }
     bool isSoftBreak() const;
     bool isGraphemeBreak() const;
     bool canBreakLineAfter() const { return isHardBreak() || isSoftBreak(); }
@@ -266,7 +267,8 @@ public:
     RunIndex runIndex() const { return fRunIndex; }
     ParagraphImpl* owner() const { return fOwner; }
 
-    Run* run() const;
+    Run* runOrNull() const;
+    Run& run() const;
     SkFont font() const;
 
     SkScalar trimmedWidth(size_t pos) const;
@@ -297,6 +299,8 @@ private:
     SkScalar fHeight;
     SkScalar fHalfLetterSpacing;
     bool fIsWhiteSpaces;
+    bool fIsSpaces;
+    bool fIsHardBreak;
 };
 
 class InternalLineMetrics {

@@ -423,9 +423,6 @@ public:
 
         void reset() { *this = {}; }
 
-        int renderTargetBinds() const { return fRenderTargetBinds; }
-        void incRenderTargetBinds() { fRenderTargetBinds++; }
-
         int textureCreates() const { return fTextureCreates; }
         void incTextureCreates() { fTextureCreates++; }
 
@@ -459,12 +456,14 @@ public:
         int numScratchMSAAAttachmentsReused() const { return fNumScratchMSAAAttachmentsReused; }
         void incNumScratchMSAAAttachmentsReused() { ++fNumScratchMSAAAttachmentsReused; }
 
+        int renderPasses() const { return fRenderPasses; }
+        void incRenderPasses() { fRenderPasses++; }
+
 #if GR_TEST_UTILS
         void dump(SkString*);
         void dumpKeyValuePairs(SkTArray<SkString>* keys, SkTArray<double>* values);
 #endif
     private:
-        int fRenderTargetBinds = 0;
         int fTextureCreates = 0;
         int fTextureUploads = 0;
         int fTransfersToTexture = 0;
@@ -476,14 +475,14 @@ public:
         int fNumSubmitToGpus = 0;
         int fNumScratchTexturesReused = 0;
         int fNumScratchMSAAAttachmentsReused = 0;
+        int fRenderPasses = 0;
 
-#else
+#else  // !GR_GPU_STATS
 
 #if GR_TEST_UTILS
         void dump(SkString*) {}
         void dumpKeyValuePairs(SkTArray<SkString>*, SkTArray<double>*) {}
 #endif
-        void incRenderTargetBinds() {}
         void incTextureCreates() {}
         void incTextureUploads() {}
         void incTransfersToTexture() {}
@@ -495,6 +494,7 @@ public:
         void incNumSubmitToGpus() {}
         void incNumScratchTexturesReused() {}
         void incNumScratchMSAAAttachmentsReused() {}
+        void incRenderPasses() {}
 #endif
     };
 

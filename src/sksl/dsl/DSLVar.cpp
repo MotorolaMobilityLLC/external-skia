@@ -5,11 +5,11 @@
  * found in the LICENSE file.
  */
 
-#include "src/sksl/dsl/DSLVar.h"
+#include "include/sksl/DSLVar.h"
 
+#include "include/sksl/DSLModifiers.h"
+#include "include/sksl/DSLType.h"
 #include "src/sksl/SkSLUtil.h"
-#include "src/sksl/dsl/DSLModifiers.h"
-#include "src/sksl/dsl/DSLType.h"
 #include "src/sksl/dsl/priv/DSLWriter.h"
 #include "src/sksl/ir/SkSLBinaryExpression.h"
 #include "src/sksl/ir/SkSLSymbolTable.h"
@@ -21,7 +21,10 @@ namespace SkSL {
 namespace dsl {
 
 DSLVar::DSLVar(const char* name)
-    : fName(name) {
+    : fDeclared(true)
+    , fVar(nullptr)
+    , fRawName(name)
+    , fName(name) {
 #if SK_SUPPORT_GPU && !defined(SKSL_STANDALONE)
     if (!strcmp(name, "sk_SampleCoord")) {
         fName = DSLWriter::CurrentEmitArgs()->fSampleCoord;
@@ -30,8 +33,8 @@ DSLVar::DSLVar(const char* name)
         // converting all DSL code into strings rather than nodes, all we really need is a
         // correctly-named variable with the right type, so we just create a placeholder for it.
         // TODO(skia/11330): we'll need to fix this when switching over to nodes.
-        fConstVar = DSLWriter::SymbolTable()->takeOwnershipOfIRNode(
-                            std::make_unique<SkSL::Variable>(
+        fVar = DSLWriter::SymbolTable()->takeOwnershipOfIRNode(
+                       std::make_unique<SkSL::Variable>(
                                   /*offset=*/-1,
                                   DSLWriter::IRGenerator().fModifiers->addToPool(SkSL::Modifiers()),
                                   fName,
@@ -43,14 +46,22 @@ DSLVar::DSLVar(const char* name)
 #endif
     const SkSL::Symbol* result = (*DSLWriter::SymbolTable())[fName];
     SkASSERTF(result, "could not find '%s' in symbol table", fName);
-    fConstVar = &result->as<SkSL::Variable>();
+    fVar = &result->as<SkSL::Variable>();
 }
 
-DSLVar::DSLVar(DSLType type, const char* name)
-    : DSLVar(DSLModifiers(), std::move(type), name) {}
+DSLVar::DSLVar(DSLType type, const char* name, DSLExpression initialValue)
+    : DSLVar(DSLModifiers(), std::move(type), name, std::move(initialValue)) {}
 
-DSLVar::DSLVar(DSLModifiers modifiers, DSLType type, const char* name)
-    : fName(DSLWriter::Name(name)) {
+DSLVar::DSLVar(DSLType type, DSLExpression initialValue)
+    : DSLVar(type, "var", std::move(initialValue)) {}
+
+DSLVar::DSLVar(DSLModifiers modifiers, DSLType type, DSLExpression initialValue)
+    : DSLVar(modifiers, type, "var", std::move(initialValue)) {}
+
+DSLVar::DSLVar(DSLModifiers modifiers, DSLType type, const char* name, DSLExpression initialValue)
+    : fDeclared(DSLWriter::Instance().fMarkVarsDeclared)
+    , fRawName(name)
+    , fName(DSLWriter::Name(name)) {
     Variable::Storage storage = Variable::Storage::kLocal;
 #if SK_SUPPORT_GPU && !defined(SKSL_STANDALONE)
     if (modifiers.fModifiers.fFlags & Modifiers::kUniform_Flag) {
@@ -78,28 +89,32 @@ DSLVar::DSLVar(DSLModifiers modifiers, DSLType type, const char* name)
                                                                  grslType,
                                                                  this->name(),
                                                                  count,
-                                                                 &name);
+                                                                 &name).toIndex();
             fName = name;
         }
+        fDeclared = true;
     }
 #endif // SK_SUPPORT_GPU && !defined(SKSL_STANDALONE)
     DSLWriter::IRGenerator().checkVarDeclaration(/*offset=*/-1, modifiers.fModifiers,
                                                  &type.skslType(), storage);
-    fVar = DSLWriter::IRGenerator().convertVar(/*offset=*/-1,
-                                               modifiers.fModifiers,
-                                               &type.skslType(),
-                                               fName,
-                                               /*isArray=*/false,
-                                               /*arraySize=*/nullptr,
-                                               storage);
+    std::unique_ptr<SkSL::Variable> var = DSLWriter::IRGenerator().convertVar(/*offset=*/-1,
+                                                                              modifiers.fModifiers,
+                                                                              &type.skslType(),
+                                                                              fName,
+                                                                              /*isArray=*/false,
+                                                                              /*arraySize=*/nullptr,
+                                                                              storage);
+    fVar = var.get();
+    fDeclaration = DSLWriter::IRGenerator().convertVarDeclaration(std::move(var),
+                                                                  initialValue.release());
 }
 
-#if !defined(SKSL_STANDALONE) && SK_SUPPORT_GPU
-GrGLSLUniformHandler::UniformHandle DSLVar::uniformHandle() const {
-    SkASSERT(fVar->modifiers().fFlags & SkSL::Modifiers::kUniform_Flag);
-    return fUniformHandle;
+DSLVar::~DSLVar() {
+    if (!fDeclared) {
+        DSLWriter::ReportError(String::printf("error: variable '%s' was destroyed without being "
+                                              "declared\n", fRawName).c_str());
+    }
 }
-#endif
 
 DSLPossibleExpression DSLVar::operator[](DSLExpression&& index) {
     return DSLExpression(*this)[std::move(index)];

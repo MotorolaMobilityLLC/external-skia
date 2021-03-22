@@ -10,7 +10,7 @@
 
 #include <memory>
 
-#include "src/sksl/SkSLDefines.h"
+#include "include/private/SkSLDefines.h"
 #include "src/sksl/SkSLOperators.h"
 
 namespace SkSL {
@@ -55,7 +55,8 @@ public:
                                                 int offset,
                                                 const Expression& left,
                                                 Operator op,
-                                                const Expression& right);
+                                                const Expression& right,
+                                                const Type& resultType);
 };
 
 }  // namespace SkSL

@@ -34,7 +34,6 @@
   * [infra](#recipes-infra)
   * [infra:examples/full](#recipes-infra_examples_full)
   * [perf](#recipes-perf)
-  * [perf_canvaskit](#recipes-perf_canvaskit)
   * [perf_pathkit](#recipes-perf_pathkit)
   * [perf_skottietrace](#recipes-perf_skottietrace)
   * [perf_skottiewasm_lottieweb](#recipes-perf_skottiewasm_lottieweb)
@@ -299,21 +298,23 @@ Prepare the variables.
 &mdash; **def [RunSteps](/infra/bots/recipes/compile.py#25)(api):**
 ### *recipes* / [compute\_buildstats](/infra/bots/recipes/compute_buildstats.py)
 
-[DEPS](/infra/bots/recipes/compute_buildstats.py#7): [recipe\_engine/context][recipe_engine/recipe_modules/context], [recipe\_engine/file][recipe_engine/recipe_modules/file], [recipe\_engine/path][recipe_engine/recipe_modules/path], [recipe\_engine/properties][recipe_engine/recipe_modules/properties], [recipe\_engine/python][recipe_engine/recipe_modules/python], [recipe\_engine/raw\_io][recipe_engine/recipe_modules/raw_io], [recipe\_engine/step][recipe_engine/recipe_modules/step], [checkout](#recipe_modules-checkout), [env](#recipe_modules-env), [run](#recipe_modules-run), [vars](#recipe_modules-vars)
+[DEPS](/infra/bots/recipes/compute_buildstats.py#9): [recipe\_engine/context][recipe_engine/recipe_modules/context], [recipe\_engine/file][recipe_engine/recipe_modules/file], [recipe\_engine/path][recipe_engine/recipe_modules/path], [recipe\_engine/properties][recipe_engine/recipe_modules/properties], [recipe\_engine/python][recipe_engine/recipe_modules/python], [recipe\_engine/raw\_io][recipe_engine/recipe_modules/raw_io], [recipe\_engine/step][recipe_engine/recipe_modules/step], [checkout](#recipe_modules-checkout), [env](#recipe_modules-env), [run](#recipe_modules-run), [vars](#recipe_modules-vars)
 
-&mdash; **def [RunSteps](/infra/bots/recipes/compute_buildstats.py#21)(api):**
+&mdash; **def [RunSteps](/infra/bots/recipes/compute_buildstats.py#32)(api):**
 
-&mdash; **def [analyze\_cpp\_lib](/infra/bots/recipes/compute_buildstats.py#139)(api, checkout_root, out_dir, files):**
+&mdash; **def [add\_binary\_size\_output\_property](/infra/bots/recipes/compute_buildstats.py#28)(result, source, binary_size):**
 
-&mdash; **def [analyze\_flutter\_lib](/infra/bots/recipes/compute_buildstats.py#153)(api, checkout_root, out_dir, files):**
+&mdash; **def [analyze\_cpp\_lib](/infra/bots/recipes/compute_buildstats.py#164)(api, checkout_root, out_dir, files):**
 
-&mdash; **def [analyze\_wasm\_file](/infra/bots/recipes/compute_buildstats.py#183)(api, checkout_root, out_dir, files):**
+&mdash; **def [analyze\_flutter\_lib](/infra/bots/recipes/compute_buildstats.py#192)(api, checkout_root, out_dir, files):**
 
-&mdash; **def [analyze\_web\_file](/infra/bots/recipes/compute_buildstats.py#126)(api, checkout_root, out_dir, files):**
+&mdash; **def [analyze\_wasm\_file](/infra/bots/recipes/compute_buildstats.py#231)(api, checkout_root, out_dir, files):**
 
-&mdash; **def [keys\_and\_props](/infra/bots/recipes/compute_buildstats.py#102)(api):**
+&mdash; **def [analyze\_web\_file](/infra/bots/recipes/compute_buildstats.py#137)(api, checkout_root, out_dir, files):**
 
-&mdash; **def [make\_treemap](/infra/bots/recipes/compute_buildstats.py#209)(api, checkout_root, out_dir, files):**
+&mdash; **def [keys\_and\_props](/infra/bots/recipes/compute_buildstats.py#113)(api):**
+
+&mdash; **def [make\_treemap](/infra/bots/recipes/compute_buildstats.py#263)(api, checkout_root, out_dir, files):**
 ### *recipes* / [compute\_test](/infra/bots/recipes/compute_test.py)
 
 [DEPS](/infra/bots/recipes/compute_test.py#7): [recipe\_engine/file][recipe_engine/recipe_modules/file], [recipe\_engine/path][recipe_engine/recipe_modules/path], [recipe\_engine/properties][recipe_engine/recipe_modules/properties], [flavor](#recipe_modules-flavor), [run](#recipe_modules-run), [vars](#recipe_modules-vars)
@@ -377,11 +378,6 @@ Prepare the variables.
 &mdash; **def [perf\_steps](/infra/bots/recipes/perf.py#30)(api):**
 
 Run Skia benchmarks.
-### *recipes* / [perf\_canvaskit](/infra/bots/recipes/perf_canvaskit.py)
-
-[DEPS](/infra/bots/recipes/perf_canvaskit.py#7): [recipe\_engine/file][recipe_engine/recipe_modules/file], [recipe\_engine/path][recipe_engine/recipe_modules/path], [recipe\_engine/properties][recipe_engine/recipe_modules/properties], [recipe\_engine/python][recipe_engine/recipe_modules/python], [recipe\_engine/step][recipe_engine/recipe_modules/step], [checkout](#recipe_modules-checkout), [docker](#recipe_modules-docker), [env](#recipe_modules-env), [infra](#recipe_modules-infra), [run](#recipe_modules-run), [vars](#recipe_modules-vars)
-
-&mdash; **def [RunSteps](/infra/bots/recipes/perf_canvaskit.py#26)(api):**
 ### *recipes* / [perf\_pathkit](/infra/bots/recipes/perf_pathkit.py)
 
 [DEPS](/infra/bots/recipes/perf_pathkit.py#7): [recipe\_engine/file][recipe_engine/recipe_modules/file], [recipe\_engine/path][recipe_engine/recipe_modules/path], [recipe\_engine/properties][recipe_engine/recipe_modules/properties], [recipe\_engine/python][recipe_engine/recipe_modules/python], [recipe\_engine/step][recipe_engine/recipe_modules/step], [checkout](#recipe_modules-checkout), [docker](#recipe_modules-docker), [env](#recipe_modules-env), [infra](#recipe_modules-infra), [run](#recipe_modules-run), [vars](#recipe_modules-vars)
@@ -450,7 +446,7 @@ Recipe for the Skia RecreateSKPs Bot.
 
 [DEPS](/infra/bots/recipes/skpbench.py#12): [recipe\_engine/context][recipe_engine/recipe_modules/context], [recipe\_engine/file][recipe_engine/recipe_modules/file], [recipe\_engine/path][recipe_engine/recipe_modules/path], [recipe\_engine/platform][recipe_engine/recipe_modules/platform], [recipe\_engine/properties][recipe_engine/recipe_modules/properties], [recipe\_engine/python][recipe_engine/recipe_modules/python], [recipe\_engine/raw\_io][recipe_engine/recipe_modules/raw_io], [recipe\_engine/step][recipe_engine/recipe_modules/step], [recipe\_engine/time][recipe_engine/recipe_modules/time], [flavor](#recipe_modules-flavor), [run](#recipe_modules-run), [vars](#recipe_modules-vars)
 
-&mdash; **def [RunSteps](/infra/bots/recipes/skpbench.py#153)(api):**
+&mdash; **def [RunSteps](/infra/bots/recipes/skpbench.py#144)(api):**
 
 &mdash; **def [skpbench\_steps](/infra/bots/recipes/skpbench.py#41)(api):**
 

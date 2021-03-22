@@ -69,7 +69,9 @@ sk_sp<SkIDChangeListener> GrMakeUniqueKeyInvalidationListener(GrUniqueKey* key,
     public:
         Listener(const GrUniqueKey& key, uint32_t contextUniqueID) : fMsg(key, contextUniqueID) {}
 
-        void changed() override { SkMessageBus<GrUniqueKeyInvalidatedMessage>::Post(fMsg); }
+        void changed() override {
+            SkMessageBus<GrUniqueKeyInvalidatedMessage, uint32_t>::Post(fMsg);
+        }
 
     private:
         GrUniqueKeyInvalidatedMessage fMsg;
@@ -98,13 +100,18 @@ sk_sp<GrSurfaceProxy> GrCopyBaseMipMapToTextureProxy(GrRecordingContext* ctx,
                                                      SkBudgeted budgeted) {
     SkASSERT(baseProxy);
 
+    // We don't allow this for promise proxies i.e. if they need mips they need to give them
+    // to us upfront.
+    if (baseProxy->isPromiseProxy()) {
+        return nullptr;
+    }
     if (!ctx->priv().caps()->isFormatCopyable(baseProxy->backendFormat())) {
-        return {};
+        return nullptr;
     }
     auto copy = GrSurfaceProxy::Copy(ctx, std::move(baseProxy), origin, GrMipmapped::kYes,
                                      SkBackingFit::kExact, budgeted);
     if (!copy) {
-        return {};
+        return nullptr;
     }
     SkASSERT(copy->asTextureProxy());
     return copy;
@@ -438,7 +445,7 @@ bool SkPaintToGrPaintWithTexture(GrRecordingContext* context,
             if (!shaderFP) {
                 return false;
             }
-            shaderFP = GrFragmentProcessor::Compose(std::move(shaderFP), std::move(fp));
+            shaderFP = GrFragmentProcessor::Compose(std::move(fp), std::move(shaderFP));
         } else {
             shaderFP = GrFragmentProcessor::MakeInputPremulAndMulByOutput(std::move(fp));
         }

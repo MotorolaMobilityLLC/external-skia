@@ -11,6 +11,8 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "include/private/SkSLModifiers.h"
+#include "include/private/SkSLStatement.h"
 #include "src/sksl/SkSLASTFile.h"
 #include "src/sksl/SkSLASTNode.h"
 #include "src/sksl/SkSLErrorReporter.h"
@@ -20,11 +22,9 @@
 #include "src/sksl/ir/SkSLExtension.h"
 #include "src/sksl/ir/SkSLFunctionDefinition.h"
 #include "src/sksl/ir/SkSLInterfaceBlock.h"
-#include "src/sksl/ir/SkSLModifiers.h"
 #include "src/sksl/ir/SkSLModifiersDeclaration.h"
 #include "src/sksl/ir/SkSLProgram.h"
 #include "src/sksl/ir/SkSLSection.h"
-#include "src/sksl/ir/SkSLStatement.h"
 #include "src/sksl/ir/SkSLSymbolTable.h"
 #include "src/sksl/ir/SkSLType.h"
 #include "src/sksl/ir/SkSLTypeReference.h"
@@ -172,7 +172,6 @@ private:
                                                      Variable::Storage storage);
     StatementArray convertVarDeclarations(const ASTNode& decl, Variable::Storage storage);
     void convertFunction(const ASTNode& f);
-    std::unique_ptr<Statement> convertSingleStatement(const ASTNode& statement);
     std::unique_ptr<Statement> convertStatement(const ASTNode& statement);
     std::unique_ptr<Expression> convertExpression(const ASTNode& expression);
     std::unique_ptr<ModifiersDeclaration> convertModifiersDeclaration(const ASTNode& m);
@@ -216,8 +215,6 @@ private:
     std::unique_ptr<Expression> convertCallExpression(const ASTNode& expression);
     std::unique_ptr<Expression> convertFieldExpression(const ASTNode& expression);
     std::unique_ptr<Expression> convertIndexExpression(const ASTNode& expression);
-    std::unique_ptr<Expression> convertIndex(std::unique_ptr<Expression> base,
-                                             std::unique_ptr<Expression> index);
     std::unique_ptr<Expression> convertPostfixExpression(const ASTNode& expression);
     std::unique_ptr<Expression> convertScopeExpression(const ASTNode& expression);
     std::unique_ptr<StructDefinition> convertStructDefinition(const ASTNode& expression);
@@ -240,7 +237,7 @@ private:
     void findAndDeclareBuiltinVariables();
     bool detectVarDeclarationWithoutScope(const Statement& stmt);
     // Coerces returns to correct type and detects invalid break / continue placement
-    void finalizeFunction(FunctionDefinition& f);
+    void finalizeFunction(const FunctionDeclaration& funcDecl, Statement* body);
 
     // Runtime effects (and the interpreter, which uses the same CPU runtime) require adherence to
     // the strict rules from The OpenGL ES Shading Language Version 1.00. (Including Appendix A).
@@ -257,9 +254,6 @@ private:
     std::unique_ptr<ASTFile> fFile;
 
     std::shared_ptr<SymbolTable> fSymbolTable = nullptr;
-    // additional statements that need to be inserted before the one that convertStatement is
-    // currently working on
-    StatementArray fExtraStatements;
     // Symbols which have definitions in the include files.
     IRIntrinsicMap* fIntrinsics = nullptr;
     std::unordered_set<const FunctionDeclaration*> fReferencedIntrinsics;

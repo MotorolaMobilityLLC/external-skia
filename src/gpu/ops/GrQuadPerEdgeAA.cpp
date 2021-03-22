@@ -567,29 +567,33 @@ public:
 
     void getGLSLProcessorKey(const GrShaderCaps&, GrProcessorKeyBuilder* b) const override {
         // texturing, device-dimensions are single bit flags
-        uint32_t x = (fTexSubset.isInitialized() ? 0 : 0x1)
-                   | (fSampler.isInitialized()   ? 0 : 0x2)
-                   | (fNeedsPerspective          ? 0 : 0x4)
-                   | (fSaturate == Saturate::kNo ? 0 : 0x8);
-        // local coords require 2 bits (3 choices), 00 for none, 01 for 2d, 10 for 3d
+        b->addBool(fTexSubset.isInitialized(),    "subset");
+        b->addBool(fSampler.isInitialized(),      "textured");
+        b->addBool(fNeedsPerspective,             "perspective");
+        b->addBool((fSaturate == Saturate::kYes), "saturate");
+
+        b->addBool(fLocalCoord.isInitialized(),   "hasLocalCoords");
         if (fLocalCoord.isInitialized()) {
-            x |= kFloat3_GrVertexAttribType == fLocalCoord.cpuType() ? 0x10 : 0x20;
+            // 2D (0) or 3D (1)
+            b->addBits(1, (kFloat3_GrVertexAttribType == fLocalCoord.cpuType()), "localCoordsType");
         }
-        // similar for colors, 00 for none, 01 for bytes, 10 for half-floats
+        b->addBool(fColor.isInitialized(),        "hasColor");
         if (fColor.isInitialized()) {
-            x |= kUByte4_norm_GrVertexAttribType == fColor.cpuType() ? 0x40 : 0x80;
+            // bytes (0) or floats (1)
+            b->addBits(1, (kFloat4_GrVertexAttribType == fColor.cpuType()), "colorType");
         }
         // and coverage mode, 00 for none, 01 for withposition, 10 for withcolor, 11 for
         // position+geomsubset
+        uint32_t coverageKey = 0;
         SkASSERT(!fGeomSubset.isInitialized() || fCoverageMode == CoverageMode::kWithPosition);
         if (fCoverageMode != CoverageMode::kNone) {
-            x |= fGeomSubset.isInitialized()
-                         ? 0x300
-                         : (CoverageMode::kWithPosition == fCoverageMode ? 0x100 : 0x200);
+            coverageKey = fGeomSubset.isInitialized()
+                                  ? 0x3
+                                  : (CoverageMode::kWithPosition == fCoverageMode ? 0x1 : 0x2);
         }
+        b->addBits(2, coverageKey, "coverageMode");
 
-        b->add32(GrColorSpaceXform::XformKey(fTextureColorSpaceXform.get()));
-        b->add32(x);
+        b->add32(GrColorSpaceXform::XformKey(fTextureColorSpaceXform.get()), "colorSpaceXform");
     }
 
     GrGLSLPrimitiveProcessor* createGLSLInstance(const GrShaderCaps& caps) const override {
@@ -636,15 +640,19 @@ public:
                 gpArgs->fLocalCoordVar = gp.fLocalCoord.asShaderVar();
 
                 // Solid color before any texturing gets modulated in
+                const char* blendDst;
                 if (gp.fColor.isInitialized()) {
                     SkASSERT(gp.fCoverageMode != CoverageMode::kWithColor || !gp.fNeedsPerspective);
                     // The color cannot be flat if the varying coverage has been modulated into it
+                    args.fFragBuilder->codeAppendf("half4 %s;", args.fOutputColor);
                     args.fVaryingHandler->addPassThroughAttribute(gp.fColor, args.fOutputColor,
                             gp.fCoverageMode == CoverageMode::kWithColor ?
                             Interpolation::kInterpolated : Interpolation::kCanBeFlat);
+                    blendDst = args.fOutputColor;
                 } else {
                     // Output color must be initialized to something
-                    args.fFragBuilder->codeAppendf("%s = half4(1);", args.fOutputColor);
+                    args.fFragBuilder->codeAppendf("half4 %s = half4(1);", args.fOutputColor);
+                    blendDst = nullptr;
                 }
 
                 // If there is a texture, must also handle texture coordinates and reading from
@@ -671,19 +679,18 @@ public:
                         args.fVaryingHandler->addPassThroughAttribute(gp.fTexSubset, "subset",
                                                                       Interpolation::kCanBeFlat);
                         args.fFragBuilder->codeAppend(
-                                "texCoord = clamp(texCoord, subset.xy, subset.zw);");
+                                "texCoord = clamp(texCoord, subset.LT, subset.RB);");
                     }
 
                     // Now modulate the starting output color by the texture lookup
-                    args.fFragBuilder->codeAppendf("%s = ", args.fOutputColor);
+                    args.fFragBuilder->codeAppendf(
+                            "%s = %s(",
+                            args.fOutputColor,
+                            (gp.fSaturate == Saturate::kYes) ? "saturate" : "");
                     args.fFragBuilder->appendTextureLookupAndBlend(
-                            args.fOutputColor, SkBlendMode::kModulate, args.fTexSamplers[0],
+                            blendDst, SkBlendMode::kModulate, args.fTexSamplers[0],
                             "texCoord", &fTextureColorSpaceXformHelper);
-                    args.fFragBuilder->codeAppend(";");
-                    if (gp.fSaturate == Saturate::kYes) {
-                        args.fFragBuilder->codeAppendf("%s = saturate(%s);",
-                                                       args.fOutputColor, args.fOutputColor);
-                    }
+                    args.fFragBuilder->codeAppend(");");
                 } else {
                     // Saturate is only intended for use with a proxy to account for the fact
                     // that GrTextureOp skips SkPaint conversion, which normally handles this.
@@ -736,13 +743,14 @@ public:
 #endif
                     }
 
-                    args.fFragBuilder->codeAppendf("%s = half4(half(coverage));",
+                    args.fFragBuilder->codeAppendf("half4 %s = half4(half(coverage));",
                                                    args.fOutputCoverage);
                 } else {
                     // Set coverage to 1, since it's either non-AA or the coverage was already
                     // folded into the output color
                     SkASSERT(!gp.fGeomSubset.isInitialized());
-                    args.fFragBuilder->codeAppendf("%s = half4(1);", args.fOutputCoverage);
+                    args.fFragBuilder->codeAppendf("const half4 %s = half4(1);",
+                                                   args.fOutputCoverage);
                 }
             }
             GrGLSLColorSpaceXformHelper fTextureColorSpaceXformHelper;
