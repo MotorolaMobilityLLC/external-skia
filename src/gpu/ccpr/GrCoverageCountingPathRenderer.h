@@ -51,9 +51,9 @@ public:
     // Large clip paths should consider a different method, like MSAA stencil.
     constexpr static int64_t kMaxClipPathArea = 256 * 256;
 
-    std::unique_ptr<GrFragmentProcessor> makeClipProcessor(
-            std::unique_ptr<GrFragmentProcessor> inputFP, uint32_t opsTaskID,
-            const SkPath& deviceSpacePath, const SkIRect& accessRect, const GrCaps& caps);
+    GrFPResult makeClipProcessor(std::unique_ptr<GrFragmentProcessor> inputFP, uint32_t opsTaskID,
+                                 const SkPath& deviceSpacePath, const SkIRect& accessRect,
+                                 const GrCaps& caps);
 
     // GrOnFlushCallbackObject overrides.
     void preFlush(GrOnFlushResourceProvider*, SkSpan<const uint32_t> taskIDs) override;
@@ -62,8 +62,6 @@ public:
     // If a path spans more pixels than this, we need to crop it or else analytic AA can run out of
     // fp32 precision.
     static constexpr float kPathCropThreshold = 1 << 16;
-
-    static void CropPath(const SkPath&, const SkIRect& cropbox, SkPath* out);
 
     // Maximum inflation of path bounds due to stroking (from width, miter, caps). Strokes wider
     // than this will be converted to fill paths and drawn by the CCPR filler instead.
@@ -78,12 +76,6 @@ private:
     // flushed, and those that are still being created. All GrCCPerOpsTaskPaths objects will first
     // reside in fPendingPaths, then be moved to fFlushingPaths during preFlush().
     PendingPathsMap fPendingPaths;
-
-    // fFlushingPaths holds the GrCCPerOpsTaskPaths objects that are currently being flushed.
-    // (It will only contain elements when fFlushing is true.)
-    SkSTArray<4, sk_sp<GrCCPerOpsTaskPaths>> fFlushingPaths;
-
-    std::unique_ptr<GrCCPerFlushResources> fPerFlushResources;
 
     SkDEBUGCODE(bool fFlushing = false);
 };

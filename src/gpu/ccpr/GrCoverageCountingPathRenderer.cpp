@@ -51,7 +51,7 @@ GrCCPerOpsTaskPaths* GrCoverageCountingPathRenderer::lookupPendingPaths(uint32_t
     return it->second.get();
 }
 
-std::unique_ptr<GrFragmentProcessor> GrCoverageCountingPathRenderer::makeClipProcessor(
+GrFPResult GrCoverageCountingPathRenderer::makeClipProcessor(
         std::unique_ptr<GrFragmentProcessor> inputFP, uint32_t opsTaskID,
         const SkPath& deviceSpacePath, const SkIRect& accessRect, const GrCaps& caps) {
 #ifdef SK_DEBUG
@@ -64,36 +64,87 @@ std::unique_ptr<GrFragmentProcessor> GrCoverageCountingPathRenderer::makeClipPro
     }
 #endif
 
+    if (deviceSpacePath.isEmpty() ||
+        !SkIRect::Intersects(accessRect, deviceSpacePath.getBounds().roundOut())) {
+        // "Intersect" draws that don't intersect the clip can be dropped.
+        return deviceSpacePath.isInverseFillType() ? GrFPSuccess(nullptr) : GrFPFailure(nullptr);
+    }
+
     uint32_t key = deviceSpacePath.getGenerationID();
     key = (key << 1) | (uint32_t)GrFillRuleForSkPath(deviceSpacePath);
-    GrCCClipPath& clipPath =
-            this->lookupPendingPaths(opsTaskID)->fClipPaths[key];
-    if (!clipPath.isInitialized()) {
-        // This ClipPath was just created during lookup. Initialize it.
-        const SkRect& pathDevBounds = deviceSpacePath.getBounds();
-        if (std::max(pathDevBounds.height(), pathDevBounds.width()) > kPathCropThreshold) {
-            // The path is too large. Crop it or analytic AA can run out of fp32 precision.
-            SkPath croppedPath;
-            int maxRTSize = caps.maxRenderTargetSize();
-            CropPath(deviceSpacePath, SkIRect::MakeWH(maxRTSize, maxRTSize), &croppedPath);
-            clipPath.init(croppedPath, accessRect, caps);
-        } else {
-            clipPath.init(deviceSpacePath, accessRect, caps);
-        }
+    sk_sp<GrCCClipPath>& clipPath = this->lookupPendingPaths(opsTaskID)->fClipPaths[key];
+    if (!clipPath) {
+        // This the first time we've accessed this clip path key in the map.
+        clipPath = sk_make_sp<GrCCClipPath>(deviceSpacePath, accessRect, caps);
     } else {
-        clipPath.addAccess(accessRect);
+        clipPath->addAccess(accessRect);
     }
 
     auto mustCheckBounds = GrCCClipProcessor::MustCheckBounds(
-            !clipPath.pathDevIBounds().contains(accessRect));
-    return std::make_unique<GrCCClipProcessor>(std::move(inputFP), caps, &clipPath,
-                                               mustCheckBounds);
+            !clipPath->pathDevIBounds().contains(accessRect));
+    return GrFPSuccess(std::make_unique<GrCCClipProcessor>(std::move(inputFP), caps, clipPath,
+                                                           mustCheckBounds));
+}
+
+namespace {
+
+// Iterates all GrCCClipPaths in an array of non-empty maps.
+class ClipMapsIter {
+public:
+    ClipMapsIter(sk_sp<GrCCPerOpsTaskPaths>* mapsList) : fMapsList(mapsList) {}
+
+    bool operator!=(const ClipMapsIter& that) {
+        if (fMapsList != that.fMapsList) {
+            return true;
+        }
+        // fPerOpsTaskClipPaths will be null when we are on the first element.
+        if (fPerOpsTaskClipPaths != that.fPerOpsTaskClipPaths) {
+            return true;
+        }
+        return fPerOpsTaskClipPaths && fClipPathsIter != that.fClipPathsIter;
+    }
+
+    void operator++() {
+        // fPerOpsTaskClipPaths is null when we are on the first element.
+        if (!fPerOpsTaskClipPaths) {
+            fPerOpsTaskClipPaths = &(*fMapsList)->fClipPaths;
+            SkASSERT(!fPerOpsTaskClipPaths->empty());  // We don't handle empty lists.
+            fClipPathsIter = fPerOpsTaskClipPaths->begin();
+        }
+        if ((++fClipPathsIter) == fPerOpsTaskClipPaths->end()) {
+            ++fMapsList;
+            fPerOpsTaskClipPaths = nullptr;
+        }
+    }
+
+    GrCCClipPath* operator->() {
+        // fPerOpsTaskClipPaths is null when we are on the first element.
+        const auto& it = (!fPerOpsTaskClipPaths) ? (*fMapsList)->fClipPaths.begin()
+                                                 : fClipPathsIter;
+        return it->second.get();
+    }
+
+private:
+    sk_sp<GrCCPerOpsTaskPaths>* fMapsList;
+    std::map<uint32_t, sk_sp<GrCCClipPath>>* fPerOpsTaskClipPaths = nullptr;
+    std::map<uint32_t, sk_sp<GrCCClipPath>>::iterator fClipPathsIter;
+};
+
+}  // namespace
+
+static void assign_atlas_textures(GrTexture* atlasTexture, ClipMapsIter nextPathToAssign,
+                                  const ClipMapsIter& end) {
+    if (!atlasTexture) {
+        return;
+    }
+    for (; nextPathToAssign != end; ++nextPathToAssign) {
+        nextPathToAssign->assignAtlasTexture(sk_ref_sp(atlasTexture));
+    }
 }
 
 void GrCoverageCountingPathRenderer::preFlush(
         GrOnFlushResourceProvider* onFlushRP, SkSpan<const uint32_t> taskIDs) {
     SkASSERT(!fFlushing);
-    SkASSERT(fFlushingPaths.empty());
     SkDEBUGCODE(fFlushing = true);
 
     if (fPendingPaths.empty()) {
@@ -105,57 +156,45 @@ void GrCoverageCountingPathRenderer::preFlush(
     specs.fMaxPreferredTextureSize = maxPreferredRTSize;
     specs.fMinTextureSize = std::min(512, maxPreferredRTSize);
 
-    // Move the per-opsTask paths that are about to be flushed from fPendingPaths to fFlushingPaths,
+    // Move the per-opsTask paths that are about to be flushed from fPendingPaths to flushingPaths,
     // and count them up so we can preallocate buffers.
-    fFlushingPaths.reserve_back(taskIDs.count());
+    SkSTArray<8, sk_sp<GrCCPerOpsTaskPaths>> flushingPaths;
+    flushingPaths.reserve_back(taskIDs.count());
     for (uint32_t taskID : taskIDs) {
         auto iter = fPendingPaths.find(taskID);
         if (fPendingPaths.end() == iter) {
             continue;  // No paths on this opsTask.
         }
 
-        fFlushingPaths.push_back(std::move(iter->second));
+        flushingPaths.push_back(std::move(iter->second));
         fPendingPaths.erase(iter);
 
-        for (const auto& clipsIter : fFlushingPaths.back()->fClipPaths) {
-            clipsIter.second.accountForOwnPath(&specs);
+        for (const auto& clipsIter : flushingPaths.back()->fClipPaths) {
+            clipsIter.second->accountForOwnPath(&specs);
         }
     }
 
-    fPerFlushResources = std::make_unique<GrCCPerFlushResources>(onFlushRP, specs);
+    GrCCPerFlushResources perFlushResources(onFlushRP, specs);
 
     // Layout the atlas(es) and render paths.
-    for (const auto& flushingPaths : fFlushingPaths) {
-        for (auto& clipsIter : flushingPaths->fClipPaths) {
-            clipsIter.second.renderPathInAtlas(fPerFlushResources.get(), onFlushRP);
+    ClipMapsIter it(flushingPaths.begin());
+    ClipMapsIter end(flushingPaths.end());
+    ClipMapsIter nextPathToAssign = it;  // The next GrCCClipPath to call assignAtlasTexture on.
+    for (; it != end; ++it) {
+        if (auto retiredAtlas = it->renderPathInAtlas(&perFlushResources, onFlushRP)) {
+            assign_atlas_textures(retiredAtlas->textureProxy()->peekTexture(), nextPathToAssign,
+                                  it);
+            nextPathToAssign = it;
         }
     }
 
     // Allocate resources and then render the atlas(es).
-    fPerFlushResources->finalize(onFlushRP);
+    auto atlas = perFlushResources.finalize(onFlushRP);
+    assign_atlas_textures(atlas->textureProxy()->peekTexture(), nextPathToAssign, end);
 }
 
 void GrCoverageCountingPathRenderer::postFlush(GrDeferredUploadToken,
                                                SkSpan<const uint32_t> /* taskIDs */) {
     SkASSERT(fFlushing);
-
-    fPerFlushResources.reset();
-
-    if (!fFlushingPaths.empty()) {
-        // We wait to erase these until after flush, once Ops and FPs are done accessing their data.
-        fFlushingPaths.reset();
-    }
-
     SkDEBUGCODE(fFlushing = false);
-}
-
-void GrCoverageCountingPathRenderer::CropPath(const SkPath& path, const SkIRect& cropbox,
-                                              SkPath* out) {
-    SkPath cropboxPath;
-    cropboxPath.addRect(SkRect::Make(cropbox));
-    if (!Op(cropboxPath, path, kIntersect_SkPathOp, out)) {
-        // This can fail if the PathOps encounter NaN or infinities.
-        out->reset();
-    }
-    out->setIsVolatile(true);
 }

@@ -289,7 +289,7 @@ void GrResourceAllocator::expire(unsigned int curIndex) {
             // TODO: fix this insertion so we get a more LRU-ish behavior
             fFreePool.insert(r->scratchKey(), r);
         }
-        fFinishedIntvls.insertByIncreasingEnd(intvl);
+        fFinishedIntvls.insertByIncreasingStart(intvl);
     }
 }
 

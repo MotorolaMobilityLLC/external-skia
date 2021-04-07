@@ -27,7 +27,7 @@ static DEFINE_int(maxTessellationSegments, 0,
 
 static DEFINE_string(pr, "",
               "Set of enabled gpu path renderers. Defined as a list of: "
-              "[~]none [~]dashline [~]nvpr [~]ccpr [~]aahairline [~]aaconvex [~]aalinearizing "
+              "[~]none [~]dashline [~]ccpr [~]aahairline [~]aaconvex [~]aalinearizing "
               "[~]small [~]tri [~]tess [~]all");
 
 static DEFINE_int(internalSamples, 4,
@@ -44,8 +44,6 @@ static GpuPathRenderers get_named_pathrenderers_flags(const char* name) {
         return GpuPathRenderers::kNone;
     } else if (!strcmp(name, "dashline")) {
         return GpuPathRenderers::kDashLine;
-    } else if (!strcmp(name, "nvpr")) {
-        return GpuPathRenderers::kStencilAndCover;
     } else if (!strcmp(name, "ccpr")) {
         return GpuPathRenderers::kCoverageCounting;
     } else if (!strcmp(name, "aahairline")) {

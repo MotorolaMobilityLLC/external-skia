@@ -111,6 +111,8 @@ GrGLSLUniformHandler::UniformHandle DSLWriter::VarUniformHandle(const DSLVar& va
 
 std::unique_ptr<SkSL::Expression> DSLWriter::Call(const FunctionDeclaration& function,
                                                   ExpressionArray arguments) {
+    // We can't call FunctionCall::Convert directly here, because intrinsic management is handled in
+    // IRGenerator::call.
     return IRGenerator().call(/*offset=*/-1, function, std::move(arguments));
 }
 
@@ -194,8 +196,31 @@ void DSLWriter::ReportError(const char* msg, PositionInfo* info) {
     }
 }
 
-const SkSL::Variable& DSLWriter::Var(const DSLVar& var) {
+const SkSL::Variable& DSLWriter::Var(DSLVar& var) {
+    if (!var.fVar) {
+        DSLWriter::IRGenerator().checkVarDeclaration(/*offset=*/-1, var.fModifiers.fModifiers,
+                                                     &var.fType.skslType(), var.fStorage);
+        std::unique_ptr<SkSL::Variable> skslvar = DSLWriter::IRGenerator().convertVar(
+                                                                          /*offset=*/-1,
+                                                                          var.fModifiers.fModifiers,
+                                                                          &var.fType.skslType(),
+                                                                          var.fName,
+                                                                          /*isArray=*/false,
+                                                                          /*arraySize=*/nullptr,
+                                                                          var.fStorage);
+        var.fVar = skslvar.get();
+        // We can't call VarDeclaration::Convert directly here, because the IRGenerator has special
+        // treatment for sk_FragColor and sk_RTHeight that we want to preserve in DSL.
+        var.fDeclaration = DSLWriter::IRGenerator().convertVarDeclaration(
+                                                                       std::move(skslvar),
+                                                                       var.fInitialValue.release());
+    }
     return *var.fVar;
+}
+
+std::unique_ptr<SkSL::Statement> DSLWriter::Declaration(DSLVar& var) {
+    Var(var);
+    return std::move(var.fDeclaration);
 }
 
 void DSLWriter::MarkDeclared(DSLVar& var) {

@@ -24,6 +24,8 @@
 #error This file must be compiled with Arc. Use -fobjc-arc flag
 #endif
 
+GR_NORETAIN_BEGIN
+
 NSError* GrCreateMtlError(NSString* description, GrMtlErrorCode errorCode) {
     NSDictionary* userInfo = [NSDictionary dictionaryWithObject:description
                                                          forKey:NSLocalizedDescriptionKey];
@@ -98,13 +100,18 @@ id<MTLLibrary> GrCompileMtlShaderLibrary(const GrMtlGpu* gpu,
                                                    length:msl.size()
                                                  encoding:NSUTF8StringEncoding
                                              freeWhenDone:NO];
+    MTLCompileOptions* options = [[MTLCompileOptions alloc] init];
+    if (gpu->caps()->shaderCaps()->canUseFastMath()) {
+        options.fastMathEnabled = true;
+    }
+
     NSError* error = nil;
 #if defined(SK_BUILD_FOR_MAC)
     id<MTLLibrary> compiledLibrary = GrMtlNewLibraryWithSource(gpu->device(), nsSource,
-                                                               nil, &error);
+                                                               options, &error);
 #else
     id<MTLLibrary> compiledLibrary = [gpu->device() newLibraryWithSource:nsSource
-                                                                 options:nil
+                                                                 options:options
                                                                    error:&error];
 #endif
     if (!compiledLibrary) {
@@ -248,7 +255,7 @@ id<MTLTexture> GrGetMTLTextureFromSurface(GrSurface* surface) {
 // CPP Utils
 
 GrMTLPixelFormat GrGetMTLPixelFormatFromMtlTextureInfo(const GrMtlTextureInfo& info) {
-    id<MTLTexture> mtlTexture = GrGetMTLTexture(info.fTexture.get());
+    id<MTLTexture> GR_NORETAIN mtlTexture = GrGetMTLTexture(info.fTexture.get());
     return static_cast<GrMTLPixelFormat>(mtlTexture.pixelFormat);
 }
 
@@ -425,5 +432,4 @@ const char* GrMtlFormatToStr(GrMTLPixelFormat mtlFormat) {
 
 #endif
 
-
-
+GR_NORETAIN_END

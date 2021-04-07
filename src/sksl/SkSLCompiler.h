@@ -32,7 +32,6 @@
 #define SK_HEIGHT_BUILTIN              10012
 #define SK_FRAGCOORD_BUILTIN              15
 #define SK_CLOCKWISE_BUILTIN              17
-#define SK_SAMPLEMASK_BUILTIN             20
 #define SK_VERTEXID_BUILTIN               42
 #define SK_INSTANCEID_BUILTIN             43
 #define SK_INVOCATIONID_BUILTIN            8
@@ -74,8 +73,9 @@ struct ParsedModule {
  */
 class SK_API Compiler : public ErrorReporter {
 public:
-    static constexpr const char* RTADJUST_NAME  = "sk_RTAdjust";
-    static constexpr const char* PERVERTEX_NAME = "sk_PerVertex";
+    static constexpr const char FRAGCOLOR_NAME[]  = "sk_FragColor";
+    static constexpr const char RTADJUST_NAME[]  = "sk_RTAdjust";
+    static constexpr const char PERVERTEX_NAME[] = "sk_PerVertex";
 
     struct OptimizationContext {
         // nodes we have already reported errors for and should not error on again
@@ -96,6 +96,18 @@ public:
 
     Compiler(const Compiler&) = delete;
     Compiler& operator=(const Compiler&) = delete;
+
+    /**
+     * Allows optimization settings to be unilaterally overridden. This is meant to allow tools like
+     * Viewer or Nanobench to override the compiler's ProgramSettings and ShaderCaps for debugging.
+     */
+    enum class OverrideFlag {
+        kDefault,
+        kOff,
+        kOn,
+    };
+    static void EnableOptimizer(OverrideFlag flag) { sOptimizer = flag; }
+    static void EnableInliner(OverrideFlag flag) { sInliner = flag; }
 
     /**
      * If externalFunctions is supplied, those values are registered in the symbol table of the
@@ -223,6 +235,9 @@ private:
     int fErrorCount;
     String fErrorText;
     std::vector<size_t> fErrorTextLength;
+
+    static OverrideFlag sOptimizer;
+    static OverrideFlag sInliner;
 
     friend class AutoSource;
     friend class ::SkSLCompileBench;

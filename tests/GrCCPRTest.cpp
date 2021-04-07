@@ -40,10 +40,16 @@ private:
     Effect apply(GrRecordingContext* context, GrSurfaceDrawContext* rtc, GrAAType,
                  bool hasUserStencilSettings, GrAppliedClip* out,
                  SkRect* bounds) const override {
-        out->addCoverageFP(fCCPR->makeClipProcessor(
-                /*inputFP=*/nullptr, rtc->getOpsTask()->uniqueID(), fPath,
-                SkIRect::MakeWH(rtc->width(), rtc->height()), *context->priv().caps()));
-        return Effect::kClipped;
+        auto [success, fp] = fCCPR->makeClipProcessor(/*inputFP=*/nullptr,
+                                                      rtc->getOpsTask()->uniqueID(), fPath,
+                                                      SkIRect::MakeWH(rtc->width(), rtc->height()),
+                                                      *context->priv().caps());
+        if (success) {
+            out->addCoverageFP(std::move(fp));
+            return Effect::kClipped;
+        } else {
+            return Effect::kClippedOut;
+        }
     }
 
     GrCoverageCountingPathRenderer* const fCCPR;
@@ -240,9 +246,6 @@ class CCPR_parseEmptyPath : public CCPRTest {
 };
 DEF_CCPR_TEST(CCPR_parseEmptyPath)
 
-// This test doesn't currently work with clips. Forcing unnatural early deletion of the pending
-// paths triggers an assert.
-#if 0
 class CCPR_unrefPerOpsTaskPathsBeforeOps : public CCPRTest {
     void onRun(skiatest::Reporter* reporter, CCPRPathDrawer& ccpr) override {
         REPORTER_ASSERT(reporter, SkPathPriv::TestingOnly_unique(fPath));
@@ -262,7 +265,6 @@ class CCPR_unrefPerOpsTaskPathsBeforeOps : public CCPRTest {
     }
 };
 DEF_CCPR_TEST(CCPR_unrefPerOpsTaskPathsBeforeOps)
-#endif
 
 class CCPRRenderingTest {
 public:
