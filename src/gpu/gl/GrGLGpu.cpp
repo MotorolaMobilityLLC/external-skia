@@ -674,6 +674,10 @@ sk_sp<GrTexture> GrGLGpu::onWrapBackendTexture(const GrBackendTexture& backendTe
 
     auto texture = GrGLTexture::MakeWrapped(this, mipmapStatus, desc,
                                             backendTex.getGLTextureParams(), cacheable, ioType);
+    if (this->glCaps().isFormatRenderable(backendTex.getBackendFormat(), 1)) {
+        // Pessimistically assume this external texture may have been bound to a FBO.
+        texture->baseLevelWasBoundToFBO();
+    }
     return std::move(texture);
 }
 
@@ -787,13 +791,19 @@ sk_sp<GrRenderTarget> GrGLGpu::onWrapBackendRenderTarget(const GrBackendRenderTa
         return nullptr;
     }
 
-    GrGLRenderTarget::IDs rtIDs;
-    rtIDs.fRTFBOID = info.fFBOID;
-    rtIDs.fMSColorRenderbufferID = 0;
-    rtIDs.fTexFBOID = GrGLRenderTarget::kUnresolvableFBOID;
-    rtIDs.fRTFBOOwnership = GrBackendObjectOwnership::kBorrowed;
-
     int sampleCount = this->glCaps().getRenderTargetSampleCount(backendRT.sampleCnt(), format);
+
+    GrGLRenderTarget::IDs rtIDs;
+    if (sampleCount <= 1) {
+        rtIDs.fSingleSampleFBOID = info.fFBOID;
+        rtIDs.fMultisampleFBOID = GrGLRenderTarget::kUnresolvableFBOID;
+    } else {
+        rtIDs.fSingleSampleFBOID = GrGLRenderTarget::kUnresolvableFBOID;
+        rtIDs.fMultisampleFBOID = info.fFBOID;
+    }
+    rtIDs.fMSColorRenderbufferID = 0;
+    rtIDs.fRTFBOOwnership = GrBackendObjectOwnership::kBorrowed;
+    rtIDs.fTotalMemorySamplesPerPixel = sampleCount;
 
     return GrGLRenderTarget::MakeWrapped(this, backendRT.dimensions(), format, sampleCount, rtIDs,
                                          backendRT.stencilBits());
@@ -823,6 +833,23 @@ bool GrGLGpu::onWritePixels(GrSurface* surface, int left, int top, int width, in
     }
 
     this->bindTextureToScratchUnit(glTex->target(), glTex->textureID());
+
+    // If we have mips make sure the base/max levels cover the full range so that the uploads go to
+    // the right levels. We've found some Radeons require this.
+    if (mipLevelCount && this->glCaps().mipmapLevelControlSupport()) {
+        auto params = glTex->parameters();
+        GrGLTextureParameters::NonsamplerState nonsamplerState = params->nonsamplerState();
+        int maxLevel = glTex->maxMipmapLevel();
+        if (params->nonsamplerState().fBaseMipMapLevel != 0) {
+            GL_CALL(TexParameteri(glTex->target(), GR_GL_TEXTURE_BASE_LEVEL, 0));
+            nonsamplerState.fBaseMipMapLevel = 0;
+        }
+        if (params->nonsamplerState().fMaxMipmapLevel != maxLevel) {
+            GL_CALL(TexParameteri(glTex->target(), GR_GL_TEXTURE_MAX_LEVEL, maxLevel));
+            nonsamplerState.fBaseMipMapLevel = maxLevel;
+        }
+        params->set(nullptr, nonsamplerState, fResetTimestampForTextureParameters);
+    }
 
     SkASSERT(!GrGLFormatIsCompressed(glTex->format()));
     SkIRect dstRect = SkIRect::MakeXYWH(left, top, width, height);
@@ -953,7 +980,7 @@ bool GrGLGpu::uploadColorTypeTexData(GrGLFormat textureFormat,
 bool GrGLGpu::uploadColorToTex(GrGLFormat textureFormat,
                                SkISize texDims,
                                GrGLenum target,
-                               SkColor4f color,
+                               std::array<float, 4> color,
                                uint32_t levelMask) {
     GrColorType colorType;
     GrGLenum externalFormat, externalType;
@@ -982,7 +1009,7 @@ bool GrGLGpu::uploadColorToTex(GrGLFormat textureFormat,
                 }
                 bpp = ii.bpp();
             }
-            levels[i] = {pixelStorage.get(), levelDims.width()*bpp};
+            levels[i] = {pixelStorage.get(), levelDims.width()*bpp, nullptr};
         }
     }
     this->uploadTexData(texDims, target, SkIRect::MakeSize(texDims), externalFormat, externalType,
@@ -1152,9 +1179,10 @@ bool GrGLGpu::createRenderTargetObjects(const GrGLTexture::Desc& desc,
                                         int sampleCount,
                                         GrGLRenderTarget::IDs* rtIDs) {
     rtIDs->fMSColorRenderbufferID = 0;
-    rtIDs->fRTFBOID = 0;
+    rtIDs->fMultisampleFBOID = 0;
     rtIDs->fRTFBOOwnership = GrBackendObjectOwnership::kOwned;
-    rtIDs->fTexFBOID = 0;
+    rtIDs->fSingleSampleFBOID = 0;
+    rtIDs->fTotalMemorySamplesPerPixel = 0;
 
     GrGLenum colorRenderbufferFormat = 0; // suppress warning
 
@@ -1166,8 +1194,8 @@ bool GrGLGpu::createRenderTargetObjects(const GrGLTexture::Desc& desc,
         goto FAILED;
     }
 
-    GL_CALL(GenFramebuffers(1, &rtIDs->fTexFBOID));
-    if (!rtIDs->fTexFBOID) {
+    GL_CALL(GenFramebuffers(1, &rtIDs->fSingleSampleFBOID));
+    if (!rtIDs->fSingleSampleFBOID) {
         goto FAILED;
     }
 
@@ -1175,48 +1203,56 @@ bool GrGLGpu::createRenderTargetObjects(const GrGLTexture::Desc& desc,
     // the texture bound to the other. The exception is the IMG multisample extension. With this
     // extension the texture is multisampled when rendered to and then auto-resolves it when it is
     // rendered from.
-    if (sampleCount > 1 && this->glCaps().usesMSAARenderBuffers()) {
-        GL_CALL(GenFramebuffers(1, &rtIDs->fRTFBOID));
-        GL_CALL(GenRenderbuffers(1, &rtIDs->fMSColorRenderbufferID));
-        if (!rtIDs->fRTFBOID || !rtIDs->fMSColorRenderbufferID) {
+    if (sampleCount <= 1) {
+        rtIDs->fMultisampleFBOID = GrGLRenderTarget::kUnresolvableFBOID;
+    } else {
+        GL_CALL(GenFramebuffers(1, &rtIDs->fMultisampleFBOID));
+        if (!rtIDs->fMultisampleFBOID) {
             goto FAILED;
         }
-        colorRenderbufferFormat = this->glCaps().getRenderbufferInternalFormat(desc.fFormat);
-    } else {
-        rtIDs->fRTFBOID = rtIDs->fTexFBOID;
+        if (!this->glCaps().usesImplicitMSAAResolve()) {
+            GL_CALL(GenRenderbuffers(1, &rtIDs->fMSColorRenderbufferID));
+            if (!rtIDs->fMSColorRenderbufferID) {
+                goto FAILED;
+            }
+            colorRenderbufferFormat = this->glCaps().getRenderbufferInternalFormat(desc.fFormat);
+        }
     }
 
     // below here we may bind the FBO
     fHWBoundRenderTargetUniqueID.makeInvalid();
-    if (rtIDs->fRTFBOID != rtIDs->fTexFBOID) {
+    if (rtIDs->fMSColorRenderbufferID) {
         SkASSERT(sampleCount > 1);
         GL_CALL(BindRenderbuffer(GR_GL_RENDERBUFFER, rtIDs->fMSColorRenderbufferID));
         if (!this->renderbufferStorageMSAA(*fGLContext, sampleCount, colorRenderbufferFormat,
                                            desc.fSize.width(), desc.fSize.height())) {
             goto FAILED;
         }
-        this->bindFramebuffer(GR_GL_FRAMEBUFFER, rtIDs->fRTFBOID);
+        this->bindFramebuffer(GR_GL_FRAMEBUFFER, rtIDs->fMultisampleFBOID);
         GL_CALL(FramebufferRenderbuffer(GR_GL_FRAMEBUFFER,
                                         GR_GL_COLOR_ATTACHMENT0,
                                         GR_GL_RENDERBUFFER,
                                         rtIDs->fMSColorRenderbufferID));
-    }
-    this->bindFramebuffer(GR_GL_FRAMEBUFFER, rtIDs->fTexFBOID);
-
-    if (this->glCaps().usesImplicitMSAAResolve() && sampleCount > 1) {
+        rtIDs->fTotalMemorySamplesPerPixel += sampleCount;
+    } else if (sampleCount > 1) {
+        // multisampled_render_to_texture
+        SkASSERT(this->glCaps().usesImplicitMSAAResolve());  // Otherwise fMSColorRenderbufferID!=0.
+        this->bindFramebuffer(GR_GL_FRAMEBUFFER, rtIDs->fMultisampleFBOID);
         GL_CALL(FramebufferTexture2DMultisample(GR_GL_FRAMEBUFFER,
                                                 GR_GL_COLOR_ATTACHMENT0,
                                                 desc.fTarget,
                                                 desc.fID,
                                                 0,
                                                 sampleCount));
-    } else {
-        GL_CALL(FramebufferTexture2D(GR_GL_FRAMEBUFFER,
-                                     GR_GL_COLOR_ATTACHMENT0,
-                                     desc.fTarget,
-                                     desc.fID,
-                                     0));
     }
+
+    this->bindFramebuffer(GR_GL_FRAMEBUFFER, rtIDs->fSingleSampleFBOID);
+    GL_CALL(FramebufferTexture2D(GR_GL_FRAMEBUFFER,
+                                 GR_GL_COLOR_ATTACHMENT0,
+                                 desc.fTarget,
+                                 desc.fID,
+                                 0));
+    ++rtIDs->fTotalMemorySamplesPerPixel;
 
     return true;
 
@@ -1224,11 +1260,11 @@ FAILED:
     if (rtIDs->fMSColorRenderbufferID) {
         GL_CALL(DeleteRenderbuffers(1, &rtIDs->fMSColorRenderbufferID));
     }
-    if (rtIDs->fRTFBOID != rtIDs->fTexFBOID) {
-        this->deleteFramebuffer(rtIDs->fRTFBOID);
+    if (rtIDs->fMultisampleFBOID != rtIDs->fSingleSampleFBOID) {
+        this->deleteFramebuffer(rtIDs->fMultisampleFBOID);
     }
-    if (rtIDs->fTexFBOID) {
-        this->deleteFramebuffer(rtIDs->fTexFBOID);
+    if (rtIDs->fSingleSampleFBOID) {
+        this->deleteFramebuffer(rtIDs->fSingleSampleFBOID);
     }
     return false;
 }
@@ -1350,8 +1386,11 @@ sk_sp<GrTexture> GrGLGpu::onCreateTexture(SkISize dimensions,
             fHWBoundRenderTargetUniqueID.makeInvalid();
         } else {
             this->bindTextureToScratchUnit(texDesc.fTarget, tex->textureID());
-            static constexpr SkColor4f kZeroColor = {0, 0, 0, 0};
-            this->uploadColorToTex(texDesc.fFormat, texDesc.fSize, texDesc.fTarget, kZeroColor,
+            std::array<float, 4> zeros = {};
+            this->uploadColorToTex(texDesc.fFormat,
+                                   texDesc.fSize,
+                                   texDesc.fTarget,
+                                   zeros,
                                    levelClearMask);
         }
     }
@@ -1446,11 +1485,8 @@ GrBackendTexture GrGLGpu::onCreateCompressedBackendTexture(
 
 bool GrGLGpu::onUpdateCompressedBackendTexture(const GrBackendTexture& backendTexture,
                                                sk_sp<GrRefCntedCallback> finishedCallback,
-                                               const BackendTextureData* data) {
-    SkASSERT(data && data->type() != BackendTextureData::Type::kPixmaps);
-
-    this->handleDirtyContext();
-
+                                               const void* data,
+                                               size_t length) {
     GrGLTextureInfo info;
     SkAssertResult(backendTexture.getGLTextureInfo(&info));
 
@@ -1462,27 +1498,6 @@ bool GrGLGpu::onUpdateCompressedBackendTexture(const GrBackendTexture& backendTe
     SkImage::CompressionType compression = GrBackendFormatToCompressionType(format);
 
     GrMipmapped mipMapped = backendTexture.hasMipmaps() ? GrMipmapped::kYes : GrMipmapped::kNo;
-
-    const char* rawData = nullptr;
-    size_t rawDataSize = 0;
-    SkAutoMalloc am;
-    if (data->type() == BackendTextureData::Type::kCompressed) {
-        rawData = (const char*)data->compressedData();
-        rawDataSize = data->compressedSize();
-    } else {
-        SkASSERT(data->type() == BackendTextureData::Type::kColor);
-        SkASSERT(compression != SkImage::CompressionType::kNone);
-
-        rawDataSize = SkCompressedDataSize(compression, backendTexture.dimensions(), nullptr,
-                                           backendTexture.hasMipmaps());
-
-        am.reset(rawDataSize);
-
-        GrFillInCompressedData(compression, backendTexture.dimensions(), mipMapped, (char*)am.get(),
-                               data->color());
-
-        rawData = (const char*)am.get();
-    }
 
     this->bindTextureToScratchUnit(info.fTarget, info.fID);
 
@@ -1504,9 +1519,13 @@ bool GrGLGpu::onUpdateCompressedBackendTexture(const GrBackendTexture& backendTe
         params->set(nullptr, nonsamplerState, fResetTimestampForTextureParameters);
     }
 
-    bool result = this->uploadCompressedTexData(
-            compression, glFormat, backendTexture.dimensions(),  mipMapped, GR_GL_TEXTURE_2D,
-            rawData, rawDataSize);
+    bool result = this->uploadCompressedTexData(compression,
+                                                glFormat,
+                                                backendTexture.dimensions(),
+                                                mipMapped,
+                                                GR_GL_TEXTURE_2D,
+                                                data,
+                                                length);
 
     // Unbind this texture from the scratch texture unit.
     this->bindTextureToScratchUnit(info.fTarget, 0);
@@ -1764,7 +1783,8 @@ void GrGLGpu::flushWindowRectangles(const GrWindowRectsState& windowState,
                                     const GrGLRenderTarget* rt, GrSurfaceOrigin origin) {
 #ifndef USE_NSIGHT
     typedef GrWindowRectsState::Mode Mode;
-    SkASSERT(!windowState.enabled() || rt->renderFBOID()); // Window rects can't be used on-screen.
+    // Window rects can't be used on-screen.
+    SkASSERT(!windowState.enabled() || !rt->glRTFBOIDis0());
     SkASSERT(windowState.numWindows() <= this->caps()->maxWindowRectangles());
 
     if (!this->caps()->maxWindowRectangles() ||
@@ -1800,7 +1820,8 @@ void GrGLGpu::disableWindowRectangles() {
 #endif
 }
 
-bool GrGLGpu::flushGLState(GrRenderTarget* renderTarget, const GrProgramInfo& programInfo) {
+bool GrGLGpu::flushGLState(GrRenderTarget* renderTarget, bool useMultisampleFBO,
+                           const GrProgramInfo& programInfo) {
     this->handleDirtyContext();
 
     sk_sp<GrGLProgram> program = fProgramCache->findOrCreateProgram(this->getContext(),
@@ -1840,7 +1861,7 @@ bool GrGLGpu::flushGLState(GrRenderTarget* renderTarget, const GrProgramInfo& pr
 
     // This must come after textures are flushed because a texture may need
     // to be msaa-resolved (which will modify bound FBO state).
-    this->flushRenderTarget(glRT);
+    this->flushRenderTarget(glRT, useMultisampleFBO);
 
     return true;
 }
@@ -1902,6 +1923,7 @@ GrGLenum GrGLGpu::bindBuffer(GrGpuBufferType type, const GrBuffer* buffer) {
 void GrGLGpu::clear(const GrScissorState& scissor,
                     std::array<float, 4> color,
                     GrRenderTarget* target,
+                    bool useMultisampleFBO,
                     GrSurfaceOrigin origin) {
     // parent class should never let us get here with no RT
     SkASSERT(target);
@@ -1913,9 +1935,9 @@ void GrGLGpu::clear(const GrScissorState& scissor,
     GrGLRenderTarget* glRT = static_cast<GrGLRenderTarget*>(target);
 
     if (scissor.enabled()) {
-        this->flushRenderTarget(glRT, origin, scissor.rect());
+        this->flushRenderTarget(glRT, useMultisampleFBO, origin, scissor.rect());
     } else {
-        this->flushRenderTarget(glRT);
+        this->flushRenderTarget(glRT, useMultisampleFBO);
     }
     this->flushScissor(scissor, glRT->height(), origin);
     this->disableWindowRectangles();
@@ -1932,7 +1954,8 @@ static bool use_tiled_rendering(const GrGLCaps& glCaps,
            GrStoreOp::kDiscard == stencilLoadStore.fStoreOp;
 }
 
-void GrGLGpu::beginCommandBuffer(GrRenderTarget* rt, const SkIRect& bounds, GrSurfaceOrigin origin,
+void GrGLGpu::beginCommandBuffer(GrRenderTarget* rt, bool useMultisampleFBO, const SkIRect& bounds,
+                                 GrSurfaceOrigin origin,
                                  const GrOpsRenderPass::LoadAndStoreInfo& colorLoadStore,
                                  const GrOpsRenderPass::StencilLoadAndStoreInfo& stencilLoadStore) {
     SkASSERT(!fIsExecutingCommandBuffer_DebugOnly);
@@ -1940,7 +1963,7 @@ void GrGLGpu::beginCommandBuffer(GrRenderTarget* rt, const SkIRect& bounds, GrSu
     this->handleDirtyContext();
 
     auto glRT = static_cast<GrGLRenderTarget*>(rt);
-    this->flushRenderTarget(glRT);
+    this->flushRenderTarget(glRT, useMultisampleFBO);
     SkDEBUGCODE(fIsExecutingCommandBuffer_DebugOnly = true);
 
     if (use_tiled_rendering(this->glCaps(), stencilLoadStore)) {
@@ -1972,7 +1995,7 @@ void GrGLGpu::beginCommandBuffer(GrRenderTarget* rt, const SkIRect& bounds, GrSu
     }
 }
 
-void GrGLGpu::endCommandBuffer(GrRenderTarget* rt,
+void GrGLGpu::endCommandBuffer(GrRenderTarget* rt, bool useMultisampleFBO,
                                const GrOpsRenderPass::LoadAndStoreInfo& colorLoadStore,
                                const GrOpsRenderPass::StencilLoadAndStoreInfo& stencilLoadStore) {
     SkASSERT(fIsExecutingCommandBuffer_DebugOnly);
@@ -1990,12 +2013,15 @@ void GrGLGpu::endCommandBuffer(GrRenderTarget* rt,
 
         SkSTArray<2, GrGLenum> discardAttachments;
         if (GrStoreOp::kDiscard == colorLoadStore.fStoreOp) {
-            discardAttachments.push_back(
-                    (0 == glRT->renderFBOID()) ? GR_GL_COLOR : GR_GL_COLOR_ATTACHMENT0);
+            GrGLuint renderFBOID = (useMultisampleFBO) ? glRT->multisampleFBOID()
+                                                       : glRT->singleSampleFBOID();
+            discardAttachments.push_back((!renderFBOID) ? GR_GL_COLOR : GR_GL_COLOR_ATTACHMENT0);
         }
         if (GrStoreOp::kDiscard == stencilLoadStore.fStoreOp) {
-            discardAttachments.push_back(
-                    (0 == glRT->renderFBOID()) ? GR_GL_STENCIL : GR_GL_STENCIL_ATTACHMENT);
+            GrGLuint renderFBOID = (useMultisampleFBO) ? glRT->multisampleFBOID()
+                                                       : glRT->singleSampleFBOID();
+            discardAttachments.push_back((!renderFBOID) ? GR_GL_STENCIL : GR_GL_STENCIL_ATTACHMENT);
+
         }
 
         if (!discardAttachments.empty()) {
@@ -2054,7 +2080,7 @@ void GrGLGpu::clearStencilClip(const GrScissorState& scissor, bool insideStencil
         value = 0;
     }
     GrGLRenderTarget* glRT = static_cast<GrGLRenderTarget*>(target);
-    this->flushRenderTargetNoColorWrites(glRT);
+    this->flushRenderTargetNoColorWrites(glRT, glRT->stencilIsOnMultisampleFBO());
 
     this->flushScissor(scissor, glRT->height(), origin);
     this->disableWindowRectangles();
@@ -2087,18 +2113,12 @@ bool GrGLGpu::readOrTransferPixelsFrom(GrSurface* surface, int left, int top, in
     }
 
     if (renderTarget) {
-        if (renderTarget->numSamples() <= 1 ||
-            renderTarget->renderFBOID() == renderTarget->textureFBOID()) {  // Also catches FBO 0.
-            SkASSERT(!renderTarget->requiresManualMSAAResolve());
-            this->flushRenderTargetNoColorWrites(renderTarget);
-        } else if (GrGLRenderTarget::kUnresolvableFBOID == renderTarget->textureFBOID()) {
-            SkASSERT(!renderTarget->requiresManualMSAAResolve());
+        // Always bind the single sample FBO since we can't read pixels from an MSAA framebuffer.
+        if (renderTarget->numSamples() > 1 &&
+            renderTarget->singleSampleFBOID() == GrGLRenderTarget::kUnresolvableFBOID) {
             return false;
-        } else {
-            SkASSERT(renderTarget->requiresManualMSAAResolve());
-            // we don't track the state of the READ FBO ID.
-            this->bindFramebuffer(GR_GL_READ_FRAMEBUFFER, renderTarget->textureFBOID());
         }
+        this->flushRenderTargetNoColorWrites(renderTarget, false/*useMultisampleFBO*/);
     } else {
         // Use a temporary FBO.
         this->bindSurfaceFBOForPixelOps(surface, 0, GR_GL_FRAMEBUFFER, kSrc_TempFBOTarget);
@@ -2115,26 +2135,8 @@ bool GrGLGpu::readOrTransferPixelsFrom(GrSurface* surface, int left, int top, in
     }
     GL_CALL(PixelStorei(GR_GL_PACK_ALIGNMENT, 1));
 
-    bool reattachStencil = false;
-    if (this->glCaps().detachStencilFromMSAABuffersBeforeReadPixels() &&
-        renderTarget &&
-        renderTarget->getStencilAttachment() &&
-        renderTarget->numSamples() > 1) {
-        // Fix Adreno devices that won't read from MSAA framebuffers with stencil attached
-        reattachStencil = true;
-        GL_CALL(FramebufferRenderbuffer(GR_GL_FRAMEBUFFER, GR_GL_STENCIL_ATTACHMENT,
-                                        GR_GL_RENDERBUFFER, 0));
-    }
-
     GL_CALL(ReadPixels(readRect.fX, readRect.fY, readRect.fWidth, readRect.fHeight,
                        externalFormat, externalType, offsetOrPtr));
-
-    if (reattachStencil) {
-        auto* stencilAttachment =
-                static_cast<GrGLAttachment*>(renderTarget->getStencilAttachment());
-        GL_CALL(FramebufferRenderbuffer(GR_GL_FRAMEBUFFER, GR_GL_STENCIL_ATTACHMENT,
-                                        GR_GL_RENDERBUFFER, stencilAttachment->renderbufferID()));
-    }
 
     if (rowWidthInPixels != width) {
         SkASSERT(this->glCaps().readPixelsRowBytesSupport());
@@ -2170,6 +2172,7 @@ bool GrGLGpu::onReadPixels(GrSurface* surface, int left, int top, int width, int
 
 GrOpsRenderPass* GrGLGpu::onGetOpsRenderPass(
         GrRenderTarget* rt,
+        bool useMSAASurface,
         GrAttachment*,
         GrSurfaceOrigin origin,
         const SkIRect& bounds,
@@ -2181,26 +2184,27 @@ GrOpsRenderPass* GrGLGpu::onGetOpsRenderPass(
         fCachedOpsRenderPass = std::make_unique<GrGLOpsRenderPass>(this);
     }
 
-    fCachedOpsRenderPass->set(rt, bounds, origin, colorInfo, stencilInfo);
+    fCachedOpsRenderPass->set(rt, useMSAASurface, bounds, origin, colorInfo, stencilInfo);
     return fCachedOpsRenderPass.get();
 }
 
-void GrGLGpu::flushRenderTarget(GrGLRenderTarget* target, GrSurfaceOrigin origin,
-                                const SkIRect& bounds) {
-    this->flushRenderTargetNoColorWrites(target);
+void GrGLGpu::flushRenderTarget(GrGLRenderTarget* target, bool useMultisampleFBO,
+                                GrSurfaceOrigin origin, const SkIRect& bounds) {
+    this->flushRenderTargetNoColorWrites(target, useMultisampleFBO);
     this->didWriteToSurface(target, origin, &bounds);
 }
 
-void GrGLGpu::flushRenderTarget(GrGLRenderTarget* target) {
-    this->flushRenderTargetNoColorWrites(target);
+void GrGLGpu::flushRenderTarget(GrGLRenderTarget* target, bool useMultisampleFBO) {
+    this->flushRenderTargetNoColorWrites(target, useMultisampleFBO);
     this->didWriteToSurface(target, kTopLeft_GrSurfaceOrigin, nullptr);
 }
 
-void GrGLGpu::flushRenderTargetNoColorWrites(GrGLRenderTarget* target) {
+void GrGLGpu::flushRenderTargetNoColorWrites(GrGLRenderTarget* target, bool useMultisampleFBO) {
     SkASSERT(target);
     GrGpuResource::UniqueID rtID = target->uniqueID();
-    if (fHWBoundRenderTargetUniqueID != rtID) {
-        this->bindFramebuffer(GR_GL_FRAMEBUFFER, target->renderFBOID());
+    if (fHWBoundRenderTargetUniqueID != rtID || fHWBoundFramebufferIsMSAA != useMultisampleFBO) {
+        this->bindFramebuffer(GR_GL_FRAMEBUFFER, (useMultisampleFBO) ? target->multisampleFBOID()
+                                                                     : target->singleSampleFBOID());
 #ifdef SK_DEBUG
         // don't do this check in Chromium -- this is causing
         // lots of repeated command buffer flushes when the compositor is
@@ -2216,6 +2220,7 @@ void GrGLGpu::flushRenderTargetNoColorWrites(GrGLRenderTarget* target) {
         }
 #endif
         fHWBoundRenderTargetUniqueID = rtID;
+        fHWBoundFramebufferIsMSAA = useMultisampleFBO;
         this->flushViewport(SkIRect::MakeSize(target->dimensions()),
                             target->height(),
                             kTopLeft_GrSurfaceOrigin); // the origin is irrelevant in this case
@@ -2293,10 +2298,10 @@ void GrGLGpu::onResolveRenderTarget(GrRenderTarget* target, const SkIRect& resol
     SkASSERT(this->glCaps().usesMSAARenderBuffers());
 
     GrGLRenderTarget* rt = static_cast<GrGLRenderTarget*>(target);
-    SkASSERT(rt->textureFBOID() != rt->renderFBOID());
-    SkASSERT(rt->textureFBOID() != 0 && rt->renderFBOID() != 0);
-    this->bindFramebuffer(GR_GL_READ_FRAMEBUFFER, rt->renderFBOID());
-    this->bindFramebuffer(GR_GL_DRAW_FRAMEBUFFER, rt->textureFBOID());
+    SkASSERT(rt->requiresManualMSAAResolve());
+    SkASSERT(rt->singleSampleFBOID() != 0 && rt->multisampleFBOID() != 0);
+    this->bindFramebuffer(GR_GL_READ_FRAMEBUFFER, rt->multisampleFBOID());
+    this->bindFramebuffer(GR_GL_DRAW_FRAMEBUFFER, rt->singleSampleFBOID());
 
     // make sure we go through flushRenderTarget() since we've modified
     // the bound DRAW FBO ID.
@@ -2422,7 +2427,9 @@ void GrGLGpu::flushHWAAState(GrRenderTarget* rt, bool useHWAA) {
 #ifdef SK_DEBUG
     if (useHWAA && rt->numSamples() <= 1) {
         SkASSERT(this->caps()->mixedSamplesSupport());
-        SkASSERT(0 != static_cast<GrGLRenderTarget*>(rt)->renderFBOID());
+        auto glRT = static_cast<GrGLRenderTarget*>(rt);
+        SkASSERT(glRT->singleSampleFBOID() != 0);
+        SkASSERT(glRT->multisampleFBOID() == 0);
         SkASSERT(rt->getStencilAttachment());
     }
 #endif
@@ -2826,7 +2833,7 @@ static bool rt_has_msaa_render_buffer(const GrGLRenderTarget* rt, const GrGLCaps
     // 1) It's multisampled
     // 2) We're using an extension with separate MSAA renderbuffers
     // 3) It's not FBO 0, which is special and always auto-resolves
-    return rt->numSamples() > 1 && glCaps.usesMSAARenderBuffers() && rt->renderFBOID() != 0;
+    return rt->numSamples() > 1 && glCaps.usesMSAARenderBuffers() && rt->multisampleFBOID() != 0;
 }
 
 static inline bool can_copy_texsubimage(const GrSurface* dst, const GrSurface* src,
@@ -2883,8 +2890,10 @@ void GrGLGpu::bindSurfaceFBOForPixelOps(GrSurface* surface, int mipLevel, GrGLen
         if (mipLevel == 0) {
             texture->baseLevelWasBoundToFBO();
         }
+    } else if (rt->numSamples() > 1) {
+        this->bindFramebuffer(fboTarget, rt->multisampleFBOID());
     } else {
-        this->bindFramebuffer(fboTarget, rt->renderFBOID());
+        this->bindFramebuffer(fboTarget, rt->singleSampleFBOID());
     }
 }
 
@@ -3497,27 +3506,14 @@ bool GrGLGpu::onRegenerateMipMapLevels(GrTexture* texture) {
     return true;
 }
 
-void GrGLGpu::querySampleLocations(
-        GrRenderTarget* renderTarget, SkTArray<SkPoint>* sampleLocations) {
-    this->flushRenderTargetNoColorWrites(static_cast<GrGLRenderTarget*>(renderTarget));
-
-    int effectiveSampleCnt;
-    GR_GL_GetIntegerv(this->glInterface(), GR_GL_SAMPLES, &effectiveSampleCnt);
-    SkASSERT(effectiveSampleCnt >= renderTarget->numSamples());
-
-    sampleLocations->reset(effectiveSampleCnt);
-    for (int i = 0; i < effectiveSampleCnt; ++i) {
-        GL_CALL(GetMultisamplefv(GR_GL_SAMPLE_POSITION, i, &(*sampleLocations)[i].fX));
-    }
-}
-
 void GrGLGpu::xferBarrier(GrRenderTarget* rt, GrXferBarrierType type) {
     SkASSERT(type);
     switch (type) {
         case kTexture_GrXferBarrierType: {
             GrGLRenderTarget* glrt = static_cast<GrGLRenderTarget*>(rt);
-            SkASSERT(glrt->textureFBOID() != 0 && glrt->renderFBOID() != 0);
-            if (glrt->textureFBOID() != glrt->renderFBOID()) {
+            SkASSERT(glrt->asTexture());
+            SkASSERT(glrt->singleSampleFBOID() != 0);
+            if (glrt->requiresManualMSAAResolve()) {
                 // The render target uses separate storage so no need for glTextureBarrier.
                 // FIXME: The render target will resolve automatically when its texture is bound,
                 // but we could resolve only the bounds that will be read if we do it here instead.
@@ -3605,9 +3601,9 @@ GrBackendTexture GrGLGpu::onCreateBackendTexture(SkISize dimensions,
                             std::move(parameters));
 }
 
-bool GrGLGpu::onUpdateBackendTexture(const GrBackendTexture& backendTexture,
-                                     sk_sp<GrRefCntedCallback> finishedCallback,
-                                     const BackendTextureData* data) {
+bool GrGLGpu::onClearBackendTexture(const GrBackendTexture& backendTexture,
+                                    sk_sp<GrRefCntedCallback> finishedCallback,
+                                    std::array<float, 4> color) {
     this->handleDirtyContext();
 
     GrGLTextureInfo info;
@@ -3639,24 +3635,12 @@ bool GrGLGpu::onUpdateBackendTexture(const GrBackendTexture& backendTexture,
         params->set(nullptr, nonsamplerState, fResetTimestampForTextureParameters);
     }
 
-    SkASSERT(data->type() != BackendTextureData::Type::kCompressed);
-    bool result = false;
-    if (data->type() == BackendTextureData::Type::kPixmaps) {
-        SkTDArray<GrMipLevel> texels;
-        GrColorType colorType = data->pixmap(0).colorType();
-        texels.append(numMipLevels);
-        for (int i = 0; i < numMipLevels; ++i) {
-            texels[i] = {data->pixmap(i).addr(), data->pixmap(i).rowBytes()};
-        }
-        SkIRect dstRect = SkIRect::MakeSize(backendTexture.dimensions());
-        result = this->uploadColorTypeTexData(glFormat, colorType, backendTexture.dimensions(),
-                                              info.fTarget, dstRect, colorType, texels.begin(),
-                                              texels.count());
-    } else if (data->type() == BackendTextureData::Type::kColor) {
-        uint32_t levelMask = (1 << numMipLevels) - 1;
-        result = this->uploadColorToTex(glFormat, backendTexture.dimensions(), info.fTarget,
-                                        data->color(), levelMask);
-    }
+    uint32_t levelMask = (1 << numMipLevels) - 1;
+    bool result = this->uploadColorToTex(glFormat,
+                                         backendTexture.dimensions(),
+                                         info.fTarget,
+                                         color,
+                                         levelMask);
 
     // Unbind this texture from the scratch texture unit.
     this->bindTextureToScratchUnit(info.fTarget, 0);

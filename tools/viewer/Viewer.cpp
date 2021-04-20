@@ -19,6 +19,7 @@
 #include "src/core/SkImagePriv.h"
 #include "src/core/SkMD5.h"
 #include "src/core/SkOSFile.h"
+#include "src/core/SkReadBuffer.h"
 #include "src/core/SkScan.h"
 #include "src/core/SkTSort.h"
 #include "src/core/SkTaskGroup.h"
@@ -473,6 +474,13 @@ Viewer::Viewer(int argc, char** argv, void* platformData)
         params.fGrContextOptions.fWireframeMode = !params.fGrContextOptions.fWireframeMode;
         fWindow->setRequestedDisplayParams(params);
         fWindow->inval();
+    });
+    fCommands.addCommand('w', "Modes", "Toggle reduced shaders", [this]() {
+      DisplayParams params = fWindow->getRequestedDisplayParams();
+      params.fGrContextOptions.fReducedShaderVariations =
+              !params.fGrContextOptions.fReducedShaderVariations;
+      fWindow->setRequestedDisplayParams(params);
+      fWindow->inval();
     });
     fCommands.addCommand(skui::Key::kRight, "Right", "Navigation", "Next slide", [this]() {
         this->setCurrentSlide(fCurrentSlide < fSlides.count() - 1 ? fCurrentSlide + 1 : 0);
@@ -1825,6 +1833,11 @@ void Viewer::drawImGui() {
 
                 bool* wire = &params.fGrContextOptions.fWireframeMode;
                 if (ctx && ImGui::Checkbox("Wireframe Mode", wire)) {
+                    paramsChanged = true;
+                }
+
+                bool* reducedShaders = &params.fGrContextOptions.fReducedShaderVariations;
+                if (ctx && ImGui::Checkbox("Reduced shaders", reducedShaders)) {
                     paramsChanged = true;
                 }
 

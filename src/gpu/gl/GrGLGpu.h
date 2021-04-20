@@ -71,7 +71,7 @@ public:
     GrGLenum bindBuffer(GrGpuBufferType type, const GrBuffer*);
 
     // Flushes state from GrProgramInfo to GL. Returns false if the state couldn't be set.
-    bool flushGLState(GrRenderTarget*, const GrProgramInfo&);
+    bool flushGLState(GrRenderTarget*, bool useMultisampleFBO, const GrProgramInfo&);
     void flushScissorRect(const SkIRect& scissor, int rtHeight, GrSurfaceOrigin);
 
     // The flushRenderTarget methods will all set the initial viewport to the full extent of the
@@ -106,7 +106,8 @@ public:
     // The GrGLOpsRenderPass does not buffer up draws before submitting them to the gpu.
     // Thus this is the implementation of the clear call for the corresponding passthrough function
     // on GrGLOpsRenderPass.
-    void clear(const GrScissorState&, std::array<float, 4> color, GrRenderTarget*, GrSurfaceOrigin);
+    void clear(const GrScissorState&, std::array<float, 4> color, GrRenderTarget*,
+               bool useMultisampleFBO, GrSurfaceOrigin);
 
     // The GrGLOpsRenderPass does not buffer up draws before submitting them to the gpu.
     // Thus this is the implementation of the clearStencil call for the corresponding passthrough
@@ -114,11 +115,13 @@ public:
     void clearStencilClip(const GrScissorState&, bool insideStencilMask,
                           GrRenderTarget*, GrSurfaceOrigin);
 
-    void beginCommandBuffer(GrRenderTarget*, const SkIRect& bounds, GrSurfaceOrigin,
+    void beginCommandBuffer(GrRenderTarget*, bool useMultisampleFBO,
+                            const SkIRect& bounds, GrSurfaceOrigin,
                             const GrOpsRenderPass::LoadAndStoreInfo& colorLoadStore,
                             const GrOpsRenderPass::StencilLoadAndStoreInfo& stencilLoadStore);
 
-    void endCommandBuffer(GrRenderTarget*, const GrOpsRenderPass::LoadAndStoreInfo& colorLoadStore,
+    void endCommandBuffer(GrRenderTarget*, bool useMultisampleFBO,
+                          const GrOpsRenderPass::LoadAndStoreInfo& colorLoadStore,
                           const GrOpsRenderPass::StencilLoadAndStoreInfo& stencilLoadStore);
 
     void invalidateBoundRenderTarget() {
@@ -209,19 +212,18 @@ private:
                                                       GrMipmapped,
                                                       GrProtected) override;
 
-    bool onUpdateBackendTexture(const GrBackendTexture&,
-                                sk_sp<GrRefCntedCallback> finishedCallback,
-                                const BackendTextureData*) override;
+    bool onClearBackendTexture(const GrBackendTexture&,
+                               sk_sp<GrRefCntedCallback> finishedCallback,
+                               std::array<float, 4> color) override;
 
     bool onUpdateCompressedBackendTexture(const GrBackendTexture&,
                                           sk_sp<GrRefCntedCallback> finishedCallback,
-                                          const BackendTextureData*) override;
+                                          const void* data,
+                                          size_t length) override;
 
     void onResetContext(uint32_t resetBits) override;
 
     void onResetTextureBindings() override;
-
-    void querySampleLocations(GrRenderTarget*, SkTArray<SkPoint>*) override;
 
     void xferBarrier(GrRenderTarget*, GrXferBarrierType) override;
 
@@ -331,6 +333,7 @@ private:
                          GrGpuFinishedContext finishedContext) override;
 
     GrOpsRenderPass* onGetOpsRenderPass(GrRenderTarget*,
+                                        bool useMSAASurface,
                                         GrAttachment*,
                                         GrSurfaceOrigin,
                                         const SkIRect&,
@@ -412,11 +415,12 @@ private:
 
     // The passed bounds contains the render target's color values that will subsequently be
     // written.
-    void flushRenderTarget(GrGLRenderTarget*, GrSurfaceOrigin, const SkIRect& bounds);
+    void flushRenderTarget(GrGLRenderTarget*, bool useMultisampleFBO, GrSurfaceOrigin,
+                           const SkIRect& bounds);
     // This version has an implicit bounds of the entire render target.
-    void flushRenderTarget(GrGLRenderTarget*);
+    void flushRenderTarget(GrGLRenderTarget*, bool useMultisampleFBO);
     // This version can be used when the render target's colors will not be written.
-    void flushRenderTargetNoColorWrites(GrGLRenderTarget*);
+    void flushRenderTargetNoColorWrites(GrGLRenderTarget*, bool useMultisampleFBO);
 
     void flushStencil(const GrStencilSettings&, GrSurfaceOrigin);
     void disableStencil();
@@ -451,7 +455,7 @@ private:
     bool uploadColorToTex(GrGLFormat textureFormat,
                           SkISize texDims,
                           GrGLenum target,
-                          SkColor4f color,
+                          std::array<float, 4> color,
                           uint32_t levelMask);
 
     // Pushes data to the currently bound texture to the currently active unit. 'dstRect' must be
@@ -696,6 +700,7 @@ private:
 
     TriState                                fHWWriteToColor;
     GrGpuResource::UniqueID                 fHWBoundRenderTargetUniqueID;
+    bool                                    fHWBoundFramebufferIsMSAA;
     TriState                                fHWSRGBFramebuffer;
 
     class TextureUnitBindings {

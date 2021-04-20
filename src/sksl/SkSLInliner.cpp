@@ -17,6 +17,14 @@
 #include "src/sksl/ir/SkSLBoolLiteral.h"
 #include "src/sksl/ir/SkSLBreakStatement.h"
 #include "src/sksl/ir/SkSLConstructor.h"
+#include "src/sksl/ir/SkSLConstructorArray.h"
+#include "src/sksl/ir/SkSLConstructorCompound.h"
+#include "src/sksl/ir/SkSLConstructorCompoundCast.h"
+#include "src/sksl/ir/SkSLConstructorDiagonalMatrix.h"
+#include "src/sksl/ir/SkSLConstructorMatrixResize.h"
+#include "src/sksl/ir/SkSLConstructorScalarCast.h"
+#include "src/sksl/ir/SkSLConstructorSplat.h"
+#include "src/sksl/ir/SkSLConstructorStruct.h"
 #include "src/sksl/ir/SkSLContinueStatement.h"
 #include "src/sksl/ir/SkSLDiscardStatement.h"
 #include "src/sksl/ir/SkSLDoStatement.h"
@@ -304,13 +312,53 @@ std::unique_ptr<Expression> Inliner::inlineExpression(int offset,
         case Expression::Kind::kIntLiteral:
         case Expression::Kind::kFloatLiteral:
             return expression.clone();
-        case Expression::Kind::kConstructor: {
-            const Constructor& constructor = expression.as<Constructor>();
-            auto inlinedCtor = Constructor::Convert(
-                    *fContext, offset, *constructor.type().clone(symbolTableForExpression),
-                    argList(constructor.arguments()));
-            SkASSERT(inlinedCtor);
-            return inlinedCtor;
+        case Expression::Kind::kConstructorArray: {
+            const ConstructorArray& ctor = expression.as<ConstructorArray>();
+            return ConstructorArray::Make(*fContext, offset,
+                                          *ctor.type().clone(symbolTableForExpression),
+                                          argList(ctor.arguments()));
+        }
+        case Expression::Kind::kConstructorCompound: {
+            const ConstructorCompound& ctor = expression.as<ConstructorCompound>();
+            return ConstructorCompound::Make(*fContext, offset,
+                                              *ctor.type().clone(symbolTableForExpression),
+                                              argList(ctor.arguments()));
+        }
+        case Expression::Kind::kConstructorCompoundCast: {
+            const ConstructorCompoundCast& ctor = expression.as<ConstructorCompoundCast>();
+            return ConstructorCompoundCast::Make(*fContext, offset,
+                                                  *ctor.type().clone(symbolTableForExpression),
+                                                  expr(ctor.argument()));
+        }
+        case Expression::Kind::kConstructorDiagonalMatrix: {
+            const ConstructorDiagonalMatrix& ctor = expression.as<ConstructorDiagonalMatrix>();
+            return ConstructorDiagonalMatrix::Make(*fContext, offset,
+                                                   *ctor.type().clone(symbolTableForExpression),
+                                                   expr(ctor.argument()));
+        }
+        case Expression::Kind::kConstructorMatrixResize: {
+            const ConstructorMatrixResize& ctor = expression.as<ConstructorMatrixResize>();
+            return ConstructorMatrixResize::Make(*fContext, offset,
+                                                 *ctor.type().clone(symbolTableForExpression),
+                                                 expr(ctor.argument()));
+        }
+        case Expression::Kind::kConstructorScalarCast: {
+            const ConstructorScalarCast& ctor = expression.as<ConstructorScalarCast>();
+            return ConstructorScalarCast::Make(*fContext, offset,
+                                               *ctor.type().clone(symbolTableForExpression),
+                                               expr(ctor.argument()));
+        }
+        case Expression::Kind::kConstructorSplat: {
+            const ConstructorSplat& ctor = expression.as<ConstructorSplat>();
+            return ConstructorSplat::Make(*fContext, offset,
+                                          *ctor.type().clone(symbolTableForExpression),
+                                          expr(ctor.argument()));
+        }
+        case Expression::Kind::kConstructorStruct: {
+            const ConstructorStruct& ctor = expression.as<ConstructorStruct>();
+            return ConstructorStruct::Make(*fContext, offset,
+                                           *ctor.type().clone(symbolTableForExpression),
+                                           argList(ctor.arguments()));
         }
         case Expression::Kind::kExternalFunctionCall: {
             const ExternalFunctionCall& externalCall = expression.as<ExternalFunctionCall>();
@@ -906,9 +954,16 @@ public:
                 }
                 break;
             }
-            case Expression::Kind::kConstructor: {
-                Constructor& constructorExpr = (*expr)->as<Constructor>();
-                for (std::unique_ptr<Expression>& arg : constructorExpr.arguments()) {
+            case Expression::Kind::kConstructorArray:
+            case Expression::Kind::kConstructorCompound:
+            case Expression::Kind::kConstructorCompoundCast:
+            case Expression::Kind::kConstructorDiagonalMatrix:
+            case Expression::Kind::kConstructorMatrixResize:
+            case Expression::Kind::kConstructorScalarCast:
+            case Expression::Kind::kConstructorSplat:
+            case Expression::Kind::kConstructorStruct: {
+                AnyConstructor& constructorExpr = (*expr)->asAnyConstructor();
+                for (std::unique_ptr<Expression>& arg : constructorExpr.argumentSpan()) {
                     this->visitExpression(&arg);
                 }
                 break;

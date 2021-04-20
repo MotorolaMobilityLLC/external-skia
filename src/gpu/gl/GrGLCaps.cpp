@@ -58,7 +58,6 @@ GrGLCaps::GrGLCaps(const GrContextOptions& contextOptions,
     fDisallowTexSubImageForUnormConfigTexturesEverBoundToFBO = false;
     fUseDrawInsteadOfAllRenderTargetWrites = false;
     fRequiresCullFaceEnableDisableWhenDrawingLinesAfterNonLines = false;
-    fDetachStencilFromMSAABuffersBeforeReadPixels = false;
     fDontSetBaseOrMaxLevelForExternalTextures = false;
     fNeverDisableColorWrites = false;
     fMustSetAnyTexParameterToEnableMipmapping = false;
@@ -1492,6 +1491,9 @@ void GrGLCaps::initFormatTable(const GrGLContextInfo& ctxInfo, const GrGLInterfa
         } else if (GR_IS_GR_WEBGL(standard)) {
             r8Support = ctxInfo.version() >= GR_GL_VER(2, 0);
         }
+        if (formatWorkarounds.fDisallowR8ForPowerVRSGX54x) {
+            r8Support = false;
+        }
 
         if (r8Support) {
             info.fFlags |= FormatInfo::kTexturable_Flag | msaaRenderFlags;
@@ -2388,17 +2390,11 @@ void GrGLCaps::initFormatTable(const GrGLContextInfo& ctxInfo, const GrGLInterfa
             ctInfo.fExternalIOFormats = std::make_unique<ColorTypeInfo::ExternalIOFormats[]>(
                     ctInfo.fExternalIOFormatCount);
             int ioIdx = 0;
-            // Format: RGB8, Surface: kRGB_888x, Data: kRGB_888x
+            // Format: RGB8, Surface: kRGB_888x, Data: kRGB_888
             {
                 auto& ioFormat = ctInfo.fExternalIOFormats[ioIdx++];
-                ioFormat.fColorType = GrColorType::kRGB_888x;
+                ioFormat.fColorType = GrColorType::kRGB_888;
                 ioFormat.fExternalType = GR_GL_UNSIGNED_BYTE;
-                // This is technically the wrong format to use for this color type since the color
-                // type is 4 bytes but the format is 3. However, we don't currently upload data of
-                // this type so the format is only used when creating an empty texture. If we want
-                // to support uploading data we should add in RGB_888 GrColorType. Additionally, on
-                // the FormatInfo we should have a default format to use when we want to create an
-                // empty texture.
                 ioFormat.fExternalTexImageFormat = GR_GL_RGB;
                 ioFormat.fExternalReadFormat = 0;
             }
@@ -3541,6 +3537,14 @@ void GrGLCaps::applyDriverCorrectnessWorkarounds(const GrGLContextInfo& ctxInfo,
         fMipmapSupport = false;
     }
 
+#ifdef SK_BUILD_FOR_ANDROID
+    if (kPowerVR54x_GrGLRenderer == ctxInfo.renderer()) {
+        // Flutter found glTexSubImage2D for GL_RED is much slower than GL_ALPHA on the
+        // "MC18 PERSONAL SHOPPER"
+        formatWorkarounds->fDisallowR8ForPowerVRSGX54x = true;
+    }
+#endif
+
     // https://b.corp.google.com/issues/143074513
     if (kAdreno615_GrGLRenderer == ctxInfo.renderer()) {
         fMSFBOType = kNone_MSFBOType;
@@ -3598,7 +3602,13 @@ void GrGLCaps::applyDriverCorrectnessWorkarounds(const GrGLContextInfo& ctxInfo,
         if (ctxInfo.driverVersion() <= GR_GL_DRIVER_VER(219, 0, 0)) {
             fPerformStencilClearsAsDraws = true;
         }
-        fDisallowTexSubImageForUnormConfigTexturesEverBoundToFBO = true;
+        // This is known to be fixed sometime between driver 129.0 and 145.0 on Nexus 6P.
+        // On driver 129 on Android M it fails the unit tests called WritePixelsPendingIO without
+        // the workaround. It passes on Android N with driver 145 without the workaround.
+        // skbug.com/11834
+        if (ctxInfo.driverVersion() < GR_GL_DRIVER_VER(145, 0, 0)) {
+            fDisallowTexSubImageForUnormConfigTexturesEverBoundToFBO = true;
+        }
     }
 
     if (fDriverBugWorkarounds.gl_clear_broken) {
@@ -3623,13 +3633,6 @@ void GrGLCaps::applyDriverCorrectnessWorkarounds(const GrGLContextInfo& ctxInfo,
     if (kAdreno3xx_GrGLRenderer == ctxInfo.renderer() &&
         ctxInfo.driverVersion() > GR_GL_DRIVER_VER(53, 0, 0)) {
         fRequiresCullFaceEnableDisableWhenDrawingLinesAfterNonLines = true;
-    }
-
-    // This was reproduced on a Pixel 1, but the unit test + config + options that exercise it are
-    // only tested on very specific bots. The driver claims that ReadPixels is an invalid operation
-    // when reading from an auto-resolving MSAA framebuffer that has stencil attached.
-    if (kQualcomm_GrGLDriver == ctxInfo.driver()) {
-        fDetachStencilFromMSAABuffersBeforeReadPixels = true;
     }
 
     // TODO: Don't apply this on iOS?
@@ -4108,7 +4111,6 @@ void GrGLCaps::onApplyOptionsOverrides(const GrContextOptions& options) {
         SkASSERT(!fDisallowTexSubImageForUnormConfigTexturesEverBoundToFBO);
         SkASSERT(!fUseDrawInsteadOfAllRenderTargetWrites);
         SkASSERT(!fRequiresCullFaceEnableDisableWhenDrawingLinesAfterNonLines);
-        SkASSERT(!fDetachStencilFromMSAABuffersBeforeReadPixels);
         SkASSERT(!fDontSetBaseOrMaxLevelForExternalTextures);
         SkASSERT(!fNeverDisableColorWrites);
     }
@@ -4160,7 +4162,8 @@ GrCaps::SurfaceReadPixelsSupport GrGLCaps::surfaceSupportsReadPixels(
     } else if (auto rt = static_cast<const GrGLRenderTarget*>(surface->asRenderTarget())) {
         // glReadPixels does not allow reading back from a MSAA framebuffer. If the underlying
         // GrSurface doesn't have a second FBO to resolve to then we must make a copy.
-        if (rt->numSamples() > 1 && rt->textureFBOID() == GrGLRenderTarget::kUnresolvableFBOID) {
+        if (rt->numSamples() > 1 &&
+            rt->singleSampleFBOID() == GrGLRenderTarget::kUnresolvableFBOID) {
             return SurfaceReadPixelsSupport::kCopyToTexture2D;
         }
     }

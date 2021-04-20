@@ -5,10 +5,12 @@
  * found in the LICENSE file.
  */
 
+#include "tools/flags/CommonFlagsConfig.h"
+
 #include "include/core/SkImageInfo.h"
+#include "include/core/SkSurfaceProps.h"
 #include "include/private/SkTHash.h"
 #include "src/core/SkColorSpacePriv.h"
-#include "tools/flags/CommonFlagsConfig.h"
 
 #include <stdlib.h>
 
@@ -76,6 +78,8 @@ static const struct {
     { "glestestprecompile",    "gpu", "api=gles,testPrecompile=true" },
     { "glddl",                 "gpu", "api=gl,useDDLSink=true" },
     { "glooprddl",             "gpu", "api=gl,OOPRish=true" },
+    { "glreducedshaders",      "gpu", "api=gl,reducedShaders=true" },
+    { "glesreducedshaders",    "gpu", "api=gles,reducedShaders=true" },
     { "angle_d3d11_es2",       "gpu", "api=angle_d3d11_es2" },
     { "angle_d3d11_es3",       "gpu", "api=angle_d3d11_es3" },
     { "angle_d3d9_es2",        "gpu", "api=angle_d3d9_es2" },
@@ -119,6 +123,7 @@ static const struct {
     { "mtlddl",                "gpu", "api=metal,useDDLSink=true" },
     { "mtlooprddl",            "gpu", "api=metal,OOPRish=true" },
     { "mtltestprecompile",     "gpu", "api=metal,testPrecompile=true" },
+    { "mtlreducedshaders",     "gpu", "api=metal,reducedShaders=true" },
 #endif
 #ifdef SK_DIRECT3D
     { "d3d",                   "gpu", "api=direct3d" },
@@ -484,6 +489,7 @@ SkCommandLineConfigGpu::SkCommandLineConfigGpu(const SkString&           tag,
                                                bool                      testPrecompile,
                                                bool                      useDDLSink,
                                                bool                      OOPRish,
+                                               bool                      reducedShaders,
                                                SurfType                  surfType)
         : SkCommandLineConfig(tag, SkString("gpu"), viaParts)
         , fContextType(contextType)
@@ -499,12 +505,16 @@ SkCommandLineConfigGpu::SkCommandLineConfigGpu(const SkString&           tag,
         , fTestPrecompile(testPrecompile)
         , fUseDDLSink(useDDLSink)
         , fOOPRish(OOPRish)
+        , fReducedShaders(reducedShaders)
         , fSurfType(surfType) {
     if (!useStencilBuffers) {
         fContextOverrides |= ContextOverrides::kAvoidStencilBuffers;
     }
     if (fakeGLESVersion2) {
         fContextOverrides |= ContextOverrides::kFakeGLESVersionAs2;
+    }
+    if (reducedShaders) {
+        fContextOverrides |= ContextOverrides ::kReducedShaders;
     }
 }
 
@@ -525,6 +535,7 @@ SkCommandLineConfigGpu* parse_command_line_config_gpu(const SkString&           
     bool                                testPrecompile      = false;
     bool                                useDDLs             = false;
     bool                                ooprish             = false;
+    bool                                reducedShaders      = false;
     bool                                fakeGLESVersion2    = false;
     SkCommandLineConfigGpu::SurfType    surfType = SkCommandLineConfigGpu::SurfType::kDefault;
 
@@ -546,6 +557,7 @@ SkCommandLineConfigGpu* parse_command_line_config_gpu(const SkString&           
             extendedOptions.get_option_bool("testPrecompile", &testPrecompile) &&
             extendedOptions.get_option_bool("useDDLSink", &useDDLs) &&
             extendedOptions.get_option_bool("OOPRish", &ooprish) &&
+            extendedOptions.get_option_bool("reducedShaders", &reducedShaders) &&
             extendedOptions.get_option_gpu_surf_type("surf", &surfType);
 
     // testing threading and the persistent cache are mutually exclusive.
@@ -574,6 +586,7 @@ SkCommandLineConfigGpu* parse_command_line_config_gpu(const SkString&           
                                       testPrecompile,
                                       useDDLs,
                                       ooprish,
+                                      reducedShaders,
                                       surfType);
 }
 

@@ -95,7 +95,7 @@ void GrGLSLProgramBuilder::emitAndInstallPrimProc(SkString* outputColor, SkStrin
     SkASSERT(!fGeometryProcessor);
     fGeometryProcessor.reset(geomProc.createGLSLInstance(*this->shaderCaps()));
 
-    SkAutoSTMalloc<4, SamplerHandle> texSamplers(geomProc.numTextureSamplers());
+    SkAutoSTArray<4, SamplerHandle> texSamplers(geomProc.numTextureSamplers());
     for (int i = 0; i < geomProc.numTextureSamplers(); ++i) {
         SkString name;
         name.printf("TextureSampler_%d", i);
@@ -317,14 +317,6 @@ void GrGLSLProgramBuilder::nameExpression(SkString* output, const char* baseName
 
 void GrGLSLProgramBuilder::appendUniformDecls(GrShaderFlags visibility, SkString* out) const {
     this->uniformHandler()->appendUniformDecls(visibility, out);
-}
-
-void GrGLSLProgramBuilder::addRTWidthUniform(const char* name) {
-    SkASSERT(!fUniformHandles.fRTWidthUni.isValid());
-    GrGLSLUniformHandler* uniformHandler = this->uniformHandler();
-    fUniformHandles.fRTWidthUni =
-            uniformHandler->internalAddUniformArray(nullptr, kFragment_GrShaderFlag, kHalf_GrSLType,
-                                                    name, false, 0, nullptr);
 }
 
 void GrGLSLProgramBuilder::addRTHeightUniform(const char* name) {

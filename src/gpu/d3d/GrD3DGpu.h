@@ -53,8 +53,6 @@ public:
 
     bool protectedContext() const { return false; }
 
-    void querySampleLocations(GrRenderTarget*, SkTArray<SkPoint>* sampleLocations) override;
-
     void xferBarrier(GrRenderTarget*, GrXferBarrierType) override {}
 
     void deleteBackendTexture(const GrBackendTexture&) override;
@@ -198,6 +196,7 @@ private:
     void addFinishedCallback(sk_sp<GrRefCntedCallback> finishedCallback);
 
     GrOpsRenderPass* onGetOpsRenderPass(GrRenderTarget*,
+                                        bool useMSAASurface,
                                         GrAttachment*,
                                         GrSurfaceOrigin,
                                         const SkIRect&,
@@ -219,9 +218,9 @@ private:
                                             GrMipmapped,
                                             GrProtected) override;
 
-    bool onUpdateBackendTexture(const GrBackendTexture&,
-                                sk_sp<GrRefCntedCallback> finishedCallback,
-                                const BackendTextureData*) override;
+    bool onClearBackendTexture(const GrBackendTexture&,
+                               sk_sp<GrRefCntedCallback> finishedCallback,
+                               std::array<float, 4> color) override;
 
     GrBackendTexture onCreateCompressedBackendTexture(SkISize dimensions,
                                                       const GrBackendFormat&,
@@ -230,7 +229,8 @@ private:
 
     bool onUpdateCompressedBackendTexture(const GrBackendTexture&,
                                           sk_sp<GrRefCntedCallback> finishedCallback,
-                                          const BackendTextureData*) override;
+                                          const void* data,
+                                          size_t size) override;
 
     bool submitDirectCommandList(SyncQueue sync);
 

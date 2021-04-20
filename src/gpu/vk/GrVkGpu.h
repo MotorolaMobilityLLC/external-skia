@@ -43,6 +43,10 @@ public:
     void disconnect(DisconnectType) override;
     bool disconnected() const { return fDisconnected; }
 
+    void releaseUnlockedBackendObjects() override {
+        fResourceProvider.releaseUnlockedBackendObjects();
+    }
+
     GrThreadSafePipelineBuilder* pipelineBuilder() override;
     sk_sp<GrThreadSafePipelineBuilder> refPipelineBuilder() override;
 
@@ -72,8 +76,6 @@ public:
     GrVkResourceProvider& resourceProvider() { return fResourceProvider; }
 
     GrVkPrimaryCommandBuffer* currentCommandBuffer() const { return fMainCmdBuffer; }
-
-    void querySampleLocations(GrRenderTarget*, SkTArray<SkPoint>*) override;
 
     void xferBarrier(GrRenderTarget*, GrXferBarrierType) override;
 
@@ -216,13 +218,14 @@ private:
                                                       GrMipmapped,
                                                       GrProtected) override;
 
-    bool onUpdateBackendTexture(const GrBackendTexture&,
-                                sk_sp<GrRefCntedCallback> finishedCallback,
-                                const BackendTextureData*) override;
+    bool onClearBackendTexture(const GrBackendTexture&,
+                               sk_sp<GrRefCntedCallback> finishedCallback,
+                               std::array<float, 4> color) override;
 
     bool onUpdateCompressedBackendTexture(const GrBackendTexture&,
                                           sk_sp<GrRefCntedCallback> finishedCallback,
-                                          const BackendTextureData*) override;
+                                          const void* data,
+                                          size_t length) override;
 
     bool setBackendSurfaceState(GrVkImageInfo info,
                                 sk_sp<GrBackendSurfaceMutableStateImpl> currentState,
@@ -290,6 +293,7 @@ private:
     void addFinishedCallback(sk_sp<GrRefCntedCallback> finishedCallback);
 
     GrOpsRenderPass* onGetOpsRenderPass(GrRenderTarget*,
+                                        bool useMSAASurface,
                                         GrAttachment*,
                                         GrSurfaceOrigin,
                                         const SkIRect&,

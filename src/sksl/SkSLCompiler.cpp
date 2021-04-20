@@ -13,17 +13,17 @@
 #include "src/core/SkScopeExit.h"
 #include "src/core/SkTraceEvent.h"
 #include "src/sksl/SkSLAnalysis.h"
-#include "src/sksl/SkSLCPPCodeGenerator.h"
 #include "src/sksl/SkSLConstantFolder.h"
-#include "src/sksl/SkSLGLSLCodeGenerator.h"
-#include "src/sksl/SkSLHCodeGenerator.h"
 #include "src/sksl/SkSLIRGenerator.h"
-#include "src/sksl/SkSLMetalCodeGenerator.h"
 #include "src/sksl/SkSLOperators.h"
 #include "src/sksl/SkSLProgramSettings.h"
 #include "src/sksl/SkSLRehydrator.h"
-#include "src/sksl/SkSLSPIRVCodeGenerator.h"
-#include "src/sksl/SkSLSPIRVtoHLSL.h"
+#include "src/sksl/codegen/SkSLCPPCodeGenerator.h"
+#include "src/sksl/codegen/SkSLGLSLCodeGenerator.h"
+#include "src/sksl/codegen/SkSLHCodeGenerator.h"
+#include "src/sksl/codegen/SkSLMetalCodeGenerator.h"
+#include "src/sksl/codegen/SkSLSPIRVCodeGenerator.h"
+#include "src/sksl/codegen/SkSLSPIRVtoHLSL.h"
 #include "src/sksl/ir/SkSLEnum.h"
 #include "src/sksl/ir/SkSLExpression.h"
 #include "src/sksl/ir/SkSLExpressionStatement.h"
@@ -133,7 +133,8 @@ Compiler::Compiler(const ShaderCapsClass* caps)
         TYPE(GenType), TYPE(GenHType), TYPE(GenIType), TYPE(GenBType),
         TYPE(Vec),     TYPE(HVec),     TYPE(IVec),     TYPE(BVec),
 
-        TYPE(FragmentProcessor),
+        TYPE(ColorFilter),
+        TYPE(Shader),
     };
 
     const SkSL::Symbol* privateTypes[] = {
@@ -165,6 +166,8 @@ Compiler::Compiler(const ShaderCapsClass* caps)
 
         TYPE(Sampler),
         TYPE(Texture2D),
+
+        TYPE(FragmentProcessor),
     };
 
     for (const SkSL::Symbol* type : rootTypes) {
@@ -244,11 +247,13 @@ const ParsedModule& Compiler::loadRuntimeEffectModule() {
                                                  this->loadPublicModule());
 
         // Add some aliases to the runtime effect module so that it's friendlier, and more like GLSL
-        fRuntimeEffectModule.fSymbols->addAlias("shader", fContext->fTypes.fFragmentProcessor.get());
-
         fRuntimeEffectModule.fSymbols->addAlias("vec2", fContext->fTypes.fFloat2.get());
         fRuntimeEffectModule.fSymbols->addAlias("vec3", fContext->fTypes.fFloat3.get());
         fRuntimeEffectModule.fSymbols->addAlias("vec4", fContext->fTypes.fFloat4.get());
+
+        fRuntimeEffectModule.fSymbols->addAlias("ivec2", fContext->fTypes.fInt2.get());
+        fRuntimeEffectModule.fSymbols->addAlias("ivec3", fContext->fTypes.fInt3.get());
+        fRuntimeEffectModule.fSymbols->addAlias("ivec4", fContext->fTypes.fInt4.get());
 
         fRuntimeEffectModule.fSymbols->addAlias("bvec2", fContext->fTypes.fBool2.get());
         fRuntimeEffectModule.fSymbols->addAlias("bvec3", fContext->fTypes.fBool3.get());

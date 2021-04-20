@@ -49,8 +49,15 @@ public:
         kBreak_Command,
         // int16 builtin
         kBuiltinLayout_Command,
-        // Type type, uint8 argCount, Expression[] arguments
-        kConstructor_Command,
+        // (All constructors) Type type, uint8 argCount, Expression[] arguments
+        kConstructorArray_Command,
+        kConstructorCompound_Command,
+        kConstructorCompoundCast_Command,
+        kConstructorDiagonalMatrix_Command,
+        kConstructorMatrixResize_Command,
+        kConstructorScalarCast_Command,
+        kConstructorSplat_Command,
+        kConstructorStruct_Command,
         kContinue_Command,
         kDefaultLayout_Command,
         kDefaultModifiers_Command,
@@ -215,6 +222,8 @@ private:
     std::unique_ptr<Statement> statement();
 
     std::unique_ptr<Expression> expression();
+
+    ExpressionArray expressionArray();
 
     const Type* type();
 

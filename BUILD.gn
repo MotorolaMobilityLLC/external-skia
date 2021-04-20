@@ -2451,6 +2451,19 @@ if (skia_enable_tools) {
         "modules/sksg:samples",
       ]
     }
+
+    test_app("androidkit") {
+      is_shared_library = true
+
+      sources = [
+        "modules/androidkit/src/AndroidKit.cpp",
+        "modules/androidkit/src/Canvas.cpp",
+        "modules/androidkit/src/Surface.cpp",
+      ]
+      libs = [ "jnigraphics" ]
+
+      deps = [ ":skia" ]
+    }
   }
 
   test_app("list_gms") {
