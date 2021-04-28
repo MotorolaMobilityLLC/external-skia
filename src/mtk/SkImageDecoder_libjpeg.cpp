@@ -669,7 +669,12 @@ bool SkJPEGImageDecoder::onBuildTileIndex(SkStreamRewindable* stream, int *width
 
     fBitstreamBuf = new SkBufMalloc(fIonClientHnd, fBufferAllocator);
     fBitstreamBuf->setAlignment(128);
-    fBitstreamBuf->reset((((length+127)>>7)<<7)+128+2048);
+    void *ptr = fBitstreamBuf->reset((((length+127)>>7)<<7)+128+2048);
+    if (ptr == nullptr)
+    {
+        SkDebugf("fBitstreamBuf->reset failed");
+        return false;
+    }
 
     SkStreamRewindable* dupStream = stream->duplicate().release();
 

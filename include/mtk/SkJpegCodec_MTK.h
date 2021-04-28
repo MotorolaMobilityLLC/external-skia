@@ -68,7 +68,7 @@ public:
             if (fShareFD < 0) {
                 SkDebugf("SkBufMalloc DmabufHeapAlloc fail, bufferallocator %p fd: %d size: %zu\n", fBufferAllocator, fShareFD, size);
                 close(fShareFD);
-                return 0;
+                return NULL;
             }
 
             /* Create memory mapped buffer for the buffer fd */
@@ -76,11 +76,10 @@ public:
             if (fAddr == MAP_FAILED) {
                 SkDebugf("SkBufMalloc mmap failed (%zu, %d)\n", size, fShareFD);
                 close(fShareFD);
-                return 0;
+                return NULL;
             }
         }
         return fAddr;
-
     }
     void free()
     {

@@ -517,9 +517,17 @@ bool LoadInputStreamToMem(int IonClientHnd, BufferAllocator *bufferAllocator, Sk
         size_t length = stream->getLength();
         allocMemory->setAlignment(128);
         size_t bytes_read = 0;
+        void *ptr;
         if (length)
         {
-            allocMemory->reset((((length+127)>>7)<<7)+128+2048);
+            ptr = allocMemory->reset((((length+127)>>7)<<7)+128+2048);
+            if (ptr == nullptr)
+            {
+                SkCodecPrintf("allocMemory->reset failed.");
+                if (curStreamPosition != 0 && !stream->seek(curStreamPosition))
+                    SkCodecPrintf("Cannot seek back to original position L:%d", __LINE__);
+                return false;
+            }
             bytes_read = stream->read(allocMemory->getAddr(), length);
             if (bytes_read == 0)
             {
