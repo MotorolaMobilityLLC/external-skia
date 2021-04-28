@@ -111,11 +111,11 @@ void* allocateBuffer(int ionClientHnd, BufferAllocator *bufferAllocator, ion_use
     }
     else //dma buf
     {
-        *bufferFD = DmabufHeapAlloc(bufferAllocator, "mtk-mm", size, 0, 0);
+        *bufferFD = DmabufHeapAlloc(bufferAllocator, "mtk_mm", size, 0, 0);
         if (*bufferFD < 0)
         {
             SkCodecPrintf("%s DmabufHeapAlloc fail, bufferallocator %p fd: %d size: %zu\n", __func__, bufferAllocator, *bufferFD, size);
-            close(*bufferFD);
+            *bufferFD = -1;
             return 0;
         }
 
@@ -853,6 +853,7 @@ SkJpegCodec::SkJpegCodec(SkEncodedInfo&& info, std::unique_ptr<SkStream> stream,
 #ifdef MTK_JPEG_HW_REGION_RESIZER
     if(!BufferAllocator::CheckIonSupport()) {
         fBufferAllocator = CreateDmabufHeapBufferAllocator();
+        fIonClientHnd = -1;
     }
     else
     {

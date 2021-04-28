@@ -64,10 +64,10 @@ public:
         }
         else
         {
-            fShareFD = DmabufHeapAlloc(fBufferAllocator, "mtk-mm", fSize, 0, 0);
+            fShareFD = DmabufHeapAlloc(fBufferAllocator, "mtk_mm", fSize, 0, 0);
             if (fShareFD < 0) {
                 SkDebugf("SkBufMalloc DmabufHeapAlloc fail, bufferallocator %p fd: %d size: %zu\n", fBufferAllocator, fShareFD, size);
-                close(fShareFD);
+                fShareFD = -1;
                 return NULL;
             }
 

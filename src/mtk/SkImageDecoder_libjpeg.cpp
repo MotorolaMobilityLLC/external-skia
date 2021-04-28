@@ -360,6 +360,7 @@ public:
     #ifdef MTK_SKIA_USE_ION
         if(!BufferAllocator::CheckIonSupport()) {
             fBufferAllocator = CreateDmabufHeapBufferAllocator();
+            fIonClientHnd = -1;
         }
         else
         {
