@@ -149,6 +149,9 @@ DSLPossibleExpression operator|=(DSLExpression left, DSLExpression right);
 DSLPossibleExpression operator^(DSLExpression left, DSLExpression right);
 DSLPossibleExpression operator^=(DSLExpression left, DSLExpression right);
 DSLPossibleExpression operator,(DSLExpression left, DSLExpression right);
+DSLPossibleExpression operator,(DSLPossibleExpression left, DSLExpression right);
+DSLPossibleExpression operator,(DSLExpression left, DSLPossibleExpression right);
+DSLPossibleExpression operator,(DSLPossibleExpression left, DSLPossibleExpression right);
 DSLPossibleExpression operator==(DSLExpression left, DSLExpression right);
 DSLPossibleExpression operator!=(DSLExpression left, DSLExpression right);
 DSLPossibleExpression operator>(DSLExpression left, DSLExpression right);
@@ -202,6 +205,8 @@ public:
     DSLPossibleExpression operator=(int expr);
 
     DSLPossibleExpression operator=(float expr);
+
+    DSLPossibleExpression operator=(double expr);
 
     DSLPossibleExpression operator[](DSLExpression index);
 

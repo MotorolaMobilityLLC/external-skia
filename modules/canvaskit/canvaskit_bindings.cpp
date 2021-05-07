@@ -14,7 +14,6 @@
 #include "include/core/SkColorFilter.h"
 #include "include/core/SkColorSpace.h"
 #include "include/core/SkData.h"
-#include "include/core/SkDrawable.h"
 #include "include/core/SkEncodedImageFormat.h"
 #include "include/core/SkFilterQuality.h"
 #include "include/core/SkImage.h"
@@ -35,7 +34,6 @@
 #include "include/core/SkString.h"
 #include "include/core/SkStrokeRec.h"
 #include "include/core/SkSurface.h"
-#include "include/core/SkSurfaceProps.h"
 #include "include/core/SkTextBlob.h"
 #include "include/core/SkTypeface.h"
 #include "include/core/SkTypes.h"
@@ -51,16 +49,11 @@
 #include "include/private/SkShadowFlags.h"
 #include "include/utils/SkParsePath.h"
 #include "include/utils/SkShadowUtils.h"
-#include "modules/skshaper/include/SkShaper.h"
-#include "src/core/SkFontMgrPriv.h"
-#include "src/core/SkImagePriv.h"
+#include "modules/skparagraph/include/Paragraph.h"
 #include "src/core/SkPathPriv.h"
 #include "src/core/SkResourceCache.h"
 #include "src/image/SkImage_Base.h"
 #include "src/sksl/SkSLCompiler.h"
-
-#include <iostream>
-#include <string>
 
 #include "modules/canvaskit/WasmCommon.h"
 #include <emscripten.h>
@@ -78,12 +71,9 @@
 
 #ifndef SK_NO_FONTS
 #include "include/core/SkFont.h"
+#include "include/core/SkFontMetrics.h"
 #include "include/core/SkFontMgr.h"
 #include "include/core/SkFontTypes.h"
-#endif
-
-#ifdef SK_INCLUDE_PARAGRAPH
-#include "modules/skparagraph/include/Paragraph.h"
 #endif
 
 #ifdef SK_INCLUDE_PATHOPS
@@ -911,6 +901,18 @@ EMSCRIPTEN_BINDINGS(Skia) {
                                                      uintptr_t /* float* */ innerPtr, const SkPaint& paint) {
             self.drawDRRect(ptrToSkRRect(outerPtr), ptrToSkRRect(innerPtr), paint);
         }))
+        .function("_drawGlyphs", optional_override([](SkCanvas& self,
+                                                      int count,
+                                                      uintptr_t /* uint16_t* */ glyphs,
+                                                      uintptr_t /* SkPoint*  */ positions,
+                                                      float x, float y,
+                                                      const SkFont& font,
+                                                      const SkPaint& paint)->void {
+            self.drawGlyphs(count,
+                            reinterpret_cast<const uint16_t*>(glyphs),
+                            reinterpret_cast<const SkPoint*>(positions),
+                            {x, y}, font, paint);
+        }))
         // TODO: deprecate this version, and require sampling
         .function("drawImage", optional_override([](SkCanvas& self, const sk_sp<SkImage>& image,
                                                     SkScalar x, SkScalar y, const SkPaint* paint) {
@@ -1190,6 +1192,22 @@ EMSCRIPTEN_BINDINGS(Skia) {
             int actualCodePoints = self.textToGlyphs(str, strLen, SkTextEncoding::kUTF8,
                                                      glyphIDs, expectedCodePoints);
             return actualCodePoints;
+        }))
+        .function("getMetrics", optional_override([](SkFont& self) -> JSObject {
+            SkFontMetrics fm;
+            self.getMetrics(&fm);
+
+            JSObject j = emscripten::val::object();
+            j.set("ascent",  fm.fAscent);
+            j.set("descent", fm.fDescent);
+            j.set("leading", fm.fLeading);
+            if (!(fm.fFlags & SkFontMetrics::kBoundsInvalid_Flag)) {
+                const float rect[] = {
+                    fm.fXMin, fm.fTop, fm.fXMax, fm.fBottom
+                };
+                j.set("bounds", MakeTypedArray(4, rect, "Float32Array"));
+            }
+            return j;
         }))
         .function("getScaleX", &SkFont::getScaleX)
         .function("getSize", &SkFont::getSize)
@@ -1680,7 +1698,7 @@ EMSCRIPTEN_BINDINGS(Skia) {
                                                      emscripten::val errHandler
                                                     )->sk_sp<SkRuntimeEffect> {
             SkString s(sksl.c_str(), sksl.length());
-            auto [effect, errorText] = SkRuntimeEffect::Make(s);
+            auto [effect, errorText] = SkRuntimeEffect::MakeForShader(s);
             if (!effect) {
                 errHandler.call<void>("onError", val(errorText.c_str()));
                 return nullptr;
@@ -2017,4 +2035,6 @@ EMSCRIPTEN_BINDINGS(Skia) {
     constant("ShadowTransparentOccluder", (int)SkShadowFlags::kTransparentOccluder_ShadowFlag);
     constant("ShadowGeometricOnly", (int)SkShadowFlags::kGeometricOnly_ShadowFlag);
     constant("ShadowDirectionalLight", (int)SkShadowFlags::kDirectionalLight_ShadowFlag);
+
+    constant("_GlyphRunFlags_isWhiteSpace", (int)skia::textlayout::Paragraph::kWhiteSpace_VisitorFlag);
 }

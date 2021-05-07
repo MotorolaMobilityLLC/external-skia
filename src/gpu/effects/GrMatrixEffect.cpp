@@ -29,7 +29,13 @@ private:
     void onSetData(const GrGLSLProgramDataManager& pdman,
                    const GrFragmentProcessor& proc) override {
         const GrMatrixEffect& mtx = proc.cast<GrMatrixEffect>();
-        pdman.setSkMatrix(fMatrixVar, mtx.matrix());
+        if (auto te = mtx.childProcessor(0)->asTextureEffect()) {
+            SkMatrix m = te->coordAdjustmentMatrix();
+            m.preConcat(mtx.matrix());
+            pdman.setSkMatrix(fMatrixVar, m);
+        } else {
+            pdman.setSkMatrix(fMatrixVar, mtx.matrix());
+        }
     }
 
     UniformHandle fMatrixVar;
@@ -37,9 +43,6 @@ private:
 
 std::unique_ptr<GrFragmentProcessor> GrMatrixEffect::Make(
         const SkMatrix& matrix, std::unique_ptr<GrFragmentProcessor> child) {
-    if (matrix.isIdentity()) {
-        return child;
-    }
     if (child->classID() == kGrMatrixEffect_ClassID) {
         auto me = static_cast<GrMatrixEffect*>(child.get());
         // registerChild's sample usage records whether the matrix used has perspective or not,

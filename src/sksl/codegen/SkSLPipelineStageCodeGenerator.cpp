@@ -42,9 +42,11 @@ class PipelineStageCodeGenerator {
 public:
     PipelineStageCodeGenerator(const Program& program,
                                const char* sampleCoords,
+                               const char* inputColor,
                                Callbacks* callbacks)
             : fProgram(program)
             , fSampleCoords(sampleCoords)
+            , fInputColor(inputColor)
             , fCallbacks(callbacks) {}
 
     void generateCode();
@@ -108,6 +110,7 @@ private:
 
     const Program& fProgram;
     const char*    fSampleCoords;
+    const char*    fInputColor;
     Callbacks*     fCallbacks;
 
     std::unordered_map<const Variable*, String>            fVariableNames;
@@ -162,19 +165,14 @@ void PipelineStageCodeGenerator::writeFunctionCall(const FunctionCall& c) {
         }
         SkASSERT(found);
 
-        String coordsOrMatrix;
+        String coords;
         if (arguments.size() > 1) {
             AutoOutputBuffer outputToBuffer(this);
             this->writeExpression(*arguments[1], Precedence::kSequence);
-            coordsOrMatrix = outputToBuffer.fBuffer.str();
+            coords = outputToBuffer.fBuffer.str();
         }
 
-        bool matrixCall = arguments.size() == 2 && arguments[1]->type().isMatrix();
-        if (matrixCall) {
-            this->write(fCallbacks->sampleChildWithMatrix(index, std::move(coordsOrMatrix)));
-        } else {
-            this->write(fCallbacks->sampleChild(index, std::move(coordsOrMatrix)));
-        }
+        this->write(fCallbacks->sampleChild(index, std::move(coords)));
         return;
     }
 
@@ -203,43 +201,16 @@ void PipelineStageCodeGenerator::writeVariableReference(const VariableReference&
     if (modifiers.fLayout.fBuiltin == SK_MAIN_COORDS_BUILTIN) {
         this->write(fSampleCoords);
         return;
+    } else if (modifiers.fLayout.fBuiltin == SK_INPUT_COLOR_BUILTIN) {
+        this->write(fInputColor);
+        return;
     }
 
-    auto varIndexByFlag = [this, &ref](uint32_t flag) {
-        int index = 0;
-        bool found = false;
-        for (const ProgramElement* e : fProgram.elements()) {
-            if (found) {
-                break;
-            }
-            if (e->is<GlobalVarDeclaration>()) {
-                const GlobalVarDeclaration& global = e->as<GlobalVarDeclaration>();
-                const Variable& var = global.declaration()->as<VarDeclaration>().var();
-                if (&var == ref.variable()) {
-                    found = true;
-                    break;
-                }
-                // Skip over children (shaders/colorFilters). These are indexed separately from
-                // other globals.
-                if ((var.modifiers().fFlags & flag) && !var.type().isEffectChild()) {
-                    ++index;
-                }
-            }
-        }
-        SkASSERT(found);
-        return index;
-    };
-
-    if (modifiers.fFlags & Modifiers::kVarying_Flag) {
-        this->write("_vtx_attr_");
-        this->write(to_string(varIndexByFlag(Modifiers::kVarying_Flag)));
+    auto it = fVariableNames.find(var);
+    if (it != fVariableNames.end()) {
+        this->write(it->second);
     } else {
-        auto it = fVariableNames.find(var);
-        if (it != fVariableNames.end()) {
-            this->write(it->second);
-        } else {
-            this->write(var->name());
-        }
+        this->write(var->name());
     }
 }
 
@@ -388,6 +359,17 @@ void PipelineStageCodeGenerator::writeProgramElement(const ProgramElement& e) {
 }
 
 String PipelineStageCodeGenerator::typeName(const Type& type) {
+    if (type.isArray()) {
+        // This is necessary so that name mangling on arrays-of-structs works properly.
+        String arrayName = this->typeName(type.componentType());
+        arrayName.push_back('[');
+        if (type.columns() != Type::kUnsizedArray) {
+            arrayName += to_string(type.columns());
+        }
+        arrayName.push_back(']');
+        return arrayName;
+    }
+
     auto it = fStructNames.find(&type);
     return it != fStructNames.end() ? it->second : type.name();
 }
@@ -680,8 +662,9 @@ void PipelineStageCodeGenerator::generateCode() {
 
 void ConvertProgram(const Program& program,
                     const char* sampleCoords,
+                    const char* inputColor,
                     Callbacks* callbacks) {
-    PipelineStageCodeGenerator generator(program, sampleCoords, callbacks);
+    PipelineStageCodeGenerator generator(program, sampleCoords, inputColor, callbacks);
     generator.generateCode();
 }
 

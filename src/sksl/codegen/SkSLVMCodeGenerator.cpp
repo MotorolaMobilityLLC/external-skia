@@ -1010,19 +1010,8 @@ Value SkVMGenerator::writeIntrinsicCall(const FunctionCall& c) {
         skvm::Coord coord = fLocalCoord;
         if (nargs == 2) {
             Value arg = this->writeExpression(*c.arguments()[1]);
-            if (arg.slots() == 2) {
-                // explicit sampling
-                coord = {f32(arg[0]), f32(arg[1])};
-            } else {
-                // matrix sampling
-                SkASSERT(arg.slots() == 9);
-                skvm::F32 x = f32(arg[0])**coord.x + f32(arg[3])**coord.y + f32(arg[6]),
-                          y = f32(arg[1])**coord.x + f32(arg[4])**coord.y + f32(arg[7]),
-                          w = f32(arg[2])**coord.x + f32(arg[5])**coord.y + f32(arg[8]);
-                x = x ** (1.0f / w);
-                y = y ** (1.0f / w);
-                coord = {x, y};
-            }
+            SkASSERT(arg.slots() == 2);
+            coord = {f32(arg[0]), f32(arg[1])};
         }
 
         skvm::Color color = fSampleChild(fp_it->second, coord);
@@ -1278,6 +1267,8 @@ Value SkVMGenerator::writeFunctionCall(const FunctionCall& f) {
         // This merges currentFunction().fReturned into fConditionMask. Lanes that conditionally
         // returned in the current function would otherwise resume execution within the child.
         ScopedCondition m(this, ~currentFunction().fReturned);
+        SkASSERTF(f.function().definition(), "no definition for function '%s'",
+                  f.function().description().c_str());
         this->writeFunction(*f.function().definition(), argVals, result.asSpan());
     }
 
@@ -1675,18 +1666,36 @@ skvm::Color ProgramToSkVM(const Program& program,
                           SkSpan<skvm::Val> uniforms,
                           skvm::Coord device,
                           skvm::Coord local,
+                          skvm::Color inputColor,
                           SampleChildFn sampleChild) {
-    skvm::Val args[2] = {local.x.id, local.y.id};
     skvm::Val zero = builder->splat(0.0f).id;
     skvm::Val result[4] = {zero,zero,zero,zero};
-    size_t paramSlots = 0;
+
+    skvm::Val args[6];  // At most 6 arguments (float2 coords, half4 inColor)
+    size_t argSlots = 0;
     for (const SkSL::Variable* param : function.declaration().parameters()) {
-        paramSlots += param->type().slotCount();
+        switch (param->modifiers().fLayout.fBuiltin) {
+            case SK_MAIN_COORDS_BUILTIN:
+                SkASSERT(param->type().slotCount() == 2);
+                args[argSlots++] = local.x.id;
+                args[argSlots++] = local.y.id;
+                break;
+            case SK_INPUT_COLOR_BUILTIN:
+                SkASSERT(param->type().slotCount() == 4);
+                args[argSlots++] = inputColor.r.id;
+                args[argSlots++] = inputColor.g.id;
+                args[argSlots++] = inputColor.b.id;
+                args[argSlots++] = inputColor.a.id;
+                break;
+            default:
+                SkDEBUGFAIL("Invalid parameter to main()");
+                return {};
+        }
     }
-    SkASSERT(paramSlots <= SK_ARRAY_COUNT(args));
+    SkASSERT(argSlots <= SK_ARRAY_COUNT(args));
 
     SkVMGenerator generator(program, builder, uniforms, device, local, std::move(sampleChild));
-    generator.writeFunction(function, {args, paramSlots}, result);
+    generator.writeFunction(function, {args, argSlots}, result);
 
     return skvm::Color{{builder, result[0]},
                        {builder, result[1]},
@@ -1854,8 +1863,10 @@ bool testingOnly_ProgramToSkVMShader(const Program& program, skvm::Builder* buil
         uniformVals.push_back(new_uni().id);
     }
 
-    skvm::Color result =
-            SkSL::ProgramToSkVM(program, *main, builder, uniformVals, device, local, sampleChild);
+    skvm::Color inColor = builder->uniformColor(SkColors::kWhite, &uniforms);
+
+    skvm::Color result = SkSL::ProgramToSkVM(
+            program, *main, builder, uniformVals, device, local, inColor, sampleChild);
 
     storeF(builder->varying<float>(), result.r);
     storeF(builder->varying<float>(), result.g);

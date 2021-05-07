@@ -18,7 +18,7 @@ bool FuzzSKSL2Pipeline(sk_sp<SkData> bytes) {
     SkSL::Compiler compiler(caps.get());
     SkSL::Program::Settings settings;
     std::unique_ptr<SkSL::Program> program = compiler.convertProgram(
-                                                    SkSL::ProgramKind::kRuntimeEffect,
+                                                    SkSL::ProgramKind::kRuntimeShader,
                                                     SkSL::String((const char*) bytes->data(),
                                                                  bytes->size()),
                                                     settings);
@@ -41,15 +41,10 @@ bool FuzzSKSL2Pipeline(sk_sp<SkData> bytes) {
             return SkSL::String::printf("sample(%d%s%s)", index, coords.empty() ? "" : ", ",
                                         coords.c_str());
         }
-
-        String sampleChildWithMatrix(int index, String matrix) override {
-            return SkSL::String::printf("sample(%d%s%s)", index, matrix.empty() ? "" : ", ",
-                                        matrix.c_str());
-        }
     };
 
     Callbacks callbacks;
-    SkSL::PipelineStage::ConvertProgram(*program, "coords", &callbacks);
+    SkSL::PipelineStage::ConvertProgram(*program, "coords", "inColor", &callbacks);
     return true;
 }
 

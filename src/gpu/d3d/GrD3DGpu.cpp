@@ -126,7 +126,7 @@ void GrD3DGpu::destroyResources() {
 
 GrOpsRenderPass* GrD3DGpu::onGetOpsRenderPass(
         GrRenderTarget* rt,
-        bool useMSAASurface,
+        bool /*useMSAASurface*/,
         GrAttachment*,
         GrSurfaceOrigin origin,
         const SkIRect& bounds,
@@ -138,8 +138,7 @@ GrOpsRenderPass* GrD3DGpu::onGetOpsRenderPass(
         fCachedOpsRenderPass.reset(new GrD3DOpsRenderPass(this));
     }
 
-    if (!fCachedOpsRenderPass->set(rt, useMSAASurface, origin, bounds, colorInfo, stencilInfo,
-                                   sampledProxies)) {
+    if (!fCachedOpsRenderPass->set(rt, origin, bounds, colorInfo, stencilInfo, sampledProxies)) {
         return nullptr;
     }
     return fCachedOpsRenderPass.get();
@@ -866,7 +865,7 @@ sk_sp<GrRenderTarget> GrD3DGpu::onWrapBackendRenderTarget(const GrBackendRenderT
     // We don't allow the client to supply a premade stencil buffer. We always create one if needed.
     SkASSERT(!rt.stencilBits());
     if (tgt) {
-        SkASSERT(tgt->canAttemptStencilAttachment());
+        SkASSERT(tgt->canAttemptStencilAttachment(tgt->numSamples() > 1));
     }
 
     return std::move(tgt);
@@ -882,13 +881,8 @@ sk_sp<GrGpuBuffer> GrD3DGpu::onCreateBuffer(size_t sizeInBytes, GrGpuBufferType 
     return std::move(buffer);
 }
 
-sk_sp<GrAttachment> GrD3DGpu::makeStencilAttachmentForRenderTarget(const GrRenderTarget* rt,
-                                                                   SkISize dimensions,
-                                                                   int numStencilSamples) {
-    SkASSERT(numStencilSamples == rt->numSamples() || this->caps()->mixedSamplesSupport());
-    SkASSERT(dimensions.width() >= rt->width());
-    SkASSERT(dimensions.height() >= rt->height());
-
+sk_sp<GrAttachment> GrD3DGpu::makeStencilAttachment(const GrBackendFormat& /*colorFormat*/,
+                                                    SkISize dimensions, int numStencilSamples) {
     DXGI_FORMAT sFmt = this->d3dCaps().preferredStencilFormat();
 
     fStats.incStencilAttachmentCreates();

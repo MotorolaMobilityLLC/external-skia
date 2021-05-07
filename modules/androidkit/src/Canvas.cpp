@@ -6,25 +6,27 @@
  */
 
 #include "include/core/SkCanvas.h"
+#include "include/core/SkColor.h"
 #include "include/core/SkPaint.h"
 
 #include <jni.h>
 
 namespace {
 
-SkPaint skpaint(JNIEnv* env, jobject jpaint) {
-    SkPaint paint;
-
-    // TODO: reflect jpaint
-    paint.setColor(0xff00ff00);
-
-    return paint;
+void Canvas_DrawColor(JNIEnv* env, jobject, jlong native_instance,
+                      float r, float g, float b, float a) {
+    if (auto* canvas = reinterpret_cast<SkCanvas*>(native_instance)) {
+        canvas->drawColor(SkColor4f{r, g, b, a});
+    }
 }
 
 void Canvas_DrawRect(JNIEnv* env, jobject, jlong native_instance,
-                     jfloat left, jfloat top, jfloat right, jfloat bottom, jobject paint) {
-    if (auto* canvas = reinterpret_cast<SkCanvas*>(native_instance)) {
-        canvas->drawRect(SkRect::MakeLTRB(left, top, right, bottom), skpaint(env, paint));
+                     jfloat left, jfloat top, jfloat right, jfloat bottom,
+                     jlong native_paint) {
+    auto* canvas = reinterpret_cast<SkCanvas*>(native_instance);
+    auto* paint  = reinterpret_cast<SkPaint* >(native_paint);
+    if (canvas && paint) {
+        canvas->drawRect(SkRect::MakeLTRB(left, top, right, bottom), *paint);
     }
 }
 
@@ -32,7 +34,8 @@ void Canvas_DrawRect(JNIEnv* env, jobject, jlong native_instance,
 
 int register_androidkit_Canvas(JNIEnv* env) {
     static const JNINativeMethod methods[] = {
-        {"nDrawRect", "(JFFFFLandroid/graphics/Paint;)V", reinterpret_cast<void*>(Canvas_DrawRect)},
+        {"nDrawColor", "(JFFFF)V" , reinterpret_cast<void*>(Canvas_DrawColor)},
+        {"nDrawRect" , "(JFFFFJ)V", reinterpret_cast<void*>(Canvas_DrawRect) },
     };
 
     const auto clazz = env->FindClass("org/skia/androidkit/Canvas");

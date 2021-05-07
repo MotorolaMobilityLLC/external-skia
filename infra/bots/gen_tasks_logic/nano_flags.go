@@ -166,11 +166,6 @@ func (b *taskBuilder) nanobenchFlags(doUpload bool) {
 		args = append(args, "--keepAlive", "true")
 	}
 
-	// skia:9036
-	if b.model("NVIDIA_Shield") {
-		args = append(args, "--dontReduceOpsTaskSplitting")
-	}
-
 	// Some people don't like verbose output.
 	verbose := false
 
@@ -251,8 +246,23 @@ func (b *taskBuilder) nanobenchFlags(doUpload bool) {
 		match = append(match, "~path")
 	}
 
-	if b.model(REDUCE_OPS_TASK_SPLITTING_MODELS...) {
-		args = append(args, "--reduceOpsTaskSplitting", "true")
+	if b.model(DONT_REDUCE_OPS_TASK_SPLITTING_MODELS...) {
+		args = append(args, "--dontReduceOpsTaskSplitting", "true")
+	}
+	if b.model("NUC7i5BNK") {
+		args = append(args, "--gpuResourceCacheLimit", "16777216")
+	}
+
+	if b.extraConfig("DMSAAStats") {
+		// Render tiled, single-frame skps with an extremely tall canvas that hopefully allows for
+		// us to tile most or all of the content.
+		args = append(args,
+			"--sourceType", "skp", "--clip", "0,0,1600,16384", "--GPUbenchTileW", "1600",
+			"--GPUbenchTileH", "512", "--samples", "1", "--loops", "1", "--config", "gldmsaa",
+			"--dmsaaStatsDump")
+		// Don't collect stats on the skps generated from vector content. We want these to actually
+		// trigger dmsaa.
+		match = append(match, "~svg", "~chalkboard", "~motionmark", "~ccpr")
 	}
 
 	// We do not need or want to benchmark the decodes of incomplete images.

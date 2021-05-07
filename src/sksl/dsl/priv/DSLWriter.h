@@ -19,6 +19,7 @@
 #if !defined(SKSL_STANDALONE) && SK_SUPPORT_GPU
 #include "src/gpu/glsl/GrGLSLFragmentProcessor.h"
 #endif // !defined(SKSL_STANDALONE) && SK_SUPPORT_GPU
+#include <list>
 #include <stack>
 
 class AutoDSLContext;
@@ -175,7 +176,8 @@ public:
 
     static DSLPossibleStatement ConvertSwitch(std::unique_ptr<Expression> value,
                                               ExpressionArray caseValues,
-                                              SkTArray<SkSL::StatementArray> caseStatements);
+                                              SkTArray<SkSL::StatementArray> caseStatements,
+                                              bool isStatic);
 
     /**
      * Sets the ErrorHandler associated with the current thread. This object will be notified when
@@ -199,17 +201,19 @@ public:
         return Instance().fMangle;
     }
 
+    static std::unique_ptr<SkSL::Program> ReleaseProgram();
+
     static DSLWriter& Instance();
 
     static void SetInstance(std::unique_ptr<DSLWriter> instance);
 
 private:
-    SkSL::ProgramConfig fConfig;
+    std::unique_ptr<SkSL::ProgramConfig> fConfig;
     SkSL::Compiler* fCompiler;
     std::unique_ptr<Pool> fPool;
-    std::shared_ptr<SkSL::SymbolTable> fOldSymbolTable;
     SkSL::ProgramConfig* fOldConfig;
     std::vector<std::unique_ptr<SkSL::ProgramElement>> fProgramElements;
+    std::vector<const SkSL::ProgramElement*> fSharedElements;
     ErrorHandler* fErrorHandler = nullptr;
     bool fMangle = true;
     bool fMarkVarsDeclared = false;
@@ -218,8 +222,9 @@ private:
     struct StackFrame {
         GrGLSLFragmentProcessor* fProcessor;
         GrGLSLFragmentProcessor::EmitArgs* fEmitArgs;
+        SkSL::StatementArray fSavedDeclarations;
     };
-    std::stack<StackFrame> fStack;
+    std::stack<StackFrame, std::list<StackFrame>> fStack;
 #endif // !defined(SKSL_STANDALONE) && SK_SUPPORT_GPU
 
     friend class DSLCore;

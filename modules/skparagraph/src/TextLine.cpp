@@ -314,6 +314,8 @@ void TextLine::buildTextBlob(SkCanvas* canvas, SkScalar x, SkScalar y, TextRange
     } else {
         record.fPaint.setColor(style.getColor());
     }
+    record.fVisitor_Run = context.run;
+    record.fVisitor_Pos = context.pos;
 
     // TODO: This is the change for flutter, must be removed later
     SkTextBlobBuilder builder;
@@ -321,6 +323,8 @@ void TextLine::buildTextBlob(SkCanvas* canvas, SkScalar x, SkScalar y, TextRange
     record.fClippingNeeded = context.clippingNeeded;
     if (context.clippingNeeded) {
         record.fClipRect = extendHeight(context).makeOffset(this->offset());
+    } else {
+        record.fClipRect = context.clip.makeOffset(this->offset());
     }
 
     SkScalar correctedBaseline = SkScalarFloorToScalar(this->baseline() + 0.5);
@@ -362,9 +366,9 @@ SkRect TextLine::paintShadow(SkCanvas* canvas, SkScalar x, SkScalar y, TextRange
 
         SkPaint paint;
         paint.setColor(shadow.fColor);
-        if (shadow.fBlurRadius != 0.0) {
+        if (shadow.fBlurSigma != 0.0) {
             auto filter = SkMaskFilter::MakeBlur(kNormal_SkBlurStyle,
-                                                 SkDoubleToScalar(shadow.fBlurRadius), false);
+                                                 SkDoubleToScalar(shadow.fBlurSigma), false);
             paint.setMaskFilter(filter);
         }
 
@@ -529,8 +533,8 @@ std::unique_ptr<Run> TextLine::shapeEllipsis(const SkString& ellipsis, const Run
 
     class ShapeHandler final : public SkShaper::RunHandler {
     public:
-        ShapeHandler(SkScalar lineHeight, const SkString& ellipsis)
-            : fRun(nullptr), fLineHeight(lineHeight), fEllipsis(ellipsis) {}
+        ShapeHandler(SkScalar lineHeight, bool useHalfLeading, const SkString& ellipsis)
+            : fRun(nullptr), fLineHeight(lineHeight), fUseHalfLeading(useHalfLeading), fEllipsis(ellipsis) {}
         Run* run() & { return fRun.get(); }
         std::unique_ptr<Run> run() && { return std::move(fRun); }
 
@@ -543,7 +547,7 @@ std::unique_ptr<Run> TextLine::shapeEllipsis(const SkString& ellipsis, const Run
 
         Buffer runBuffer(const RunInfo& info) override {
             SkASSERT(!fRun);
-            fRun = std::make_unique<Run>(nullptr, info, 0, fLineHeight, 0, 0);
+            fRun = std::make_unique<Run>(nullptr, info, 0, fLineHeight, fUseHalfLeading, 0, 0);
             return fRun->newRunBuffer();
         }
 
@@ -558,10 +562,11 @@ std::unique_ptr<Run> TextLine::shapeEllipsis(const SkString& ellipsis, const Run
 
         std::unique_ptr<Run> fRun;
         SkScalar fLineHeight;
+        bool fUseHalfLeading;
         SkString fEllipsis;
     };
 
-    ShapeHandler handler(run.heightMultiplier(), ellipsis);
+    ShapeHandler handler(run.heightMultiplier(), run.useHalfLeading(), ellipsis);
     std::unique_ptr<SkShaper> shaper = SkShaper::MakeShapeDontWrapOrReorder();
     SkASSERT_RELEASE(shaper != nullptr);
     shaper->shape(ellipsis.c_str(), ellipsis.size(), run.font(), true,
@@ -1008,13 +1013,12 @@ void TextLine::getRectsForRange(TextRange textRange0,
                 }
                 break;
                 case RectHeightStyle::kTight: {
-                    if (run->fHeightMultiplier > 0) {
-                        // This is a special case when we do not need to take in account this height multiplier
-                        auto correctedHeight = clip.height() / run->fHeightMultiplier;
-                        auto verticalShift =  this->sizes().runTop(context.run, LineMetricStyle::Typographic);
-                        clip.fTop += verticalShift;
-                        clip.fBottom = clip.fTop + correctedHeight;
+                    if (run->fHeightMultiplier <= 0) {
+                        break;
                     }
+                    const auto effectiveBaseline = this->baseline() + this->sizes().delta();
+                    clip.fTop = effectiveBaseline + run->ascent();
+                    clip.fBottom = effectiveBaseline + run->descent();
                 }
                 break;
                 default:
@@ -1153,12 +1157,12 @@ PositionWithAffinity TextLine::getGlyphPositionAtCoordinate(SkScalar dx) {
 
                 SkScalar offsetX = this->offset().fX;
                 ClipContext context = context0;
-#ifndef SK_PARAGRAPH_ROUND_POSITION
+
                 // This patch will help us to avoid a floating point error
                 if (SkScalarNearlyEqual(context.clip.fRight, dx - offsetX, 0.01f)) {
                     context.clip.fRight = dx - offsetX;
                 }
-#endif
+
                 if (dx < context.clip.fLeft + offsetX) {
                     // All the other runs are placed right of this one
                     auto utf16Index = fOwner->getUTF16Index(context.run->globalClusterIndex(context.pos));

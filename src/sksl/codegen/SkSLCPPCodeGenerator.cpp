@@ -7,7 +7,6 @@
 
 #include "src/sksl/codegen/SkSLCPPCodeGenerator.h"
 
-#include "include/private/SkSLSampleUsage.h"
 #include "src/sksl/SkSLAnalysis.h"
 #include "src/sksl/SkSLCPPUniformCTypes.h"
 #include "src/sksl/SkSLCompiler.h"
@@ -397,27 +396,14 @@ void CPPCodeGenerator::writeFunctionCall(const FunctionCall& c) {
             inputColor = ", " + inputColorName + ".c_str()";
         }
 
-        // coords can be float2, float3x3, or not there at all. They appear right after the fp.
+        // If coords are present, they're float2. They appear right after the fp.
         String inputCoord;
-        String invokeFunction = "invokeChild";
         if (arguments.size() > 1) {
             if (arguments[1]->type().name() == "float2") {
                 // Invoking child with explicit coordinates at this call site
                 inputCoord = this->getSampleVarName("_coords", sampleCounter);
                 addExtraEmitCodeLine(convertSKSLExpressionToCPP(*arguments[1], inputCoord));
                 inputCoord.append(".c_str()");
-            } else if (arguments[1]->type().name() == "float3x3") {
-                // Invoking child with a matrix, sampling relative to the input coords.
-                invokeFunction = "invokeChildWithMatrix";
-                SampleUsage usage = Analysis::GetSampleUsage(fProgram, child);
-
-                if (!usage.hasUniformMatrix()) {
-                    inputCoord = this->getSampleVarName("_matrix", sampleCounter);
-                    addExtraEmitCodeLine(convertSKSLExpressionToCPP(*arguments[1], inputCoord));
-                    inputCoord.append(".c_str()");
-                }
-                // else pass in the empty string to rely on invokeChildWithMatrix's automatic
-                // uniform resolution
             }
         }
         if (!inputCoord.empty()) {
@@ -427,8 +413,8 @@ void CPPCodeGenerator::writeFunctionCall(const FunctionCall& c) {
         // Write the output handling after the possible input handling
         String childName = this->getSampleVarName("_sample", sampleCounter);
         String childIndexStr = to_string(this->getChildFPIndex(child));
-        addExtraEmitCodeLine("SkString " + childName + " = this->" + invokeFunction + "(" +
-                             childIndexStr + inputColor + ", args" + inputCoord + ");");
+        addExtraEmitCodeLine("SkString " + childName + " = this->invokeChild(" + childIndexStr +
+                             inputColor + ", args" + inputCoord + ");");
 
         this->write("%s");
         fFormatArgs.push_back(childName + ".c_str()");
@@ -551,7 +537,7 @@ void CPPCodeGenerator::writeFunction(const FunctionDefinition& f) {
     if (decl.isBuiltin()) {
         return;
     }
-    fFunctionHeader = "";
+    fFunctionHeader.clear();
     OutputStream* oldOut = fOut;
     StringStream buffer;
     fOut = &buffer;
@@ -682,7 +668,7 @@ void CPPCodeGenerator::writePrivateVars() {
                 // state. Note that tracked variables must be uniform in's and that is validated
                 // before writePrivateVars() is called.
                 const UniformCTypeMapper* mapper = UniformCTypeMapper::Get(fContext, var);
-                SkASSERT(mapper && mapper->supportsTracking());
+                SkASSERT(mapper);
 
                 String name = HCodeGenerator::FieldName(String(var.name()).c_str());
                 // The member statement is different if the mapper reports a default value
@@ -1042,8 +1028,6 @@ void CPPCodeGenerator::writeSetData(std::vector<const Variable*>& uniforms) {
             }
 
             if (isTracked) {
-                SkASSERT(mapper->supportsTracking());
-
                 String prevVar = HCodeGenerator::FieldName(name) + "Prev";
                 this->writef("%sif (%s) {\n"
                              "%s    %s;\n"
@@ -1362,14 +1346,6 @@ bool CPPCodeGenerator::generateCode() {
                             + "'s type is not supported for use as a 'uniform in'");
                     return false;
                 }
-                if (decl.var().modifiers().fLayout.fFlags & Layout::kTracked_Flag) {
-                    if (!mapper->supportsTracking()) {
-                        fErrors.error(decl.fOffset, String(decl.var().name())
-                                + "'s type does not support state tracking");
-                        return false;
-                    }
-                }
-
             } else {
                 // If it's not a uniform_in, it's an error to be tracked
                 if (decl.var().modifiers().fLayout.fFlags & Layout::kTracked_Flag) {

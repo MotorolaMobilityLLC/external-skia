@@ -114,12 +114,11 @@ Layout Rehydrator::layout() {
             int primitive = this->readS8();
             int maxVertices = this->readS8();
             int invocations = this->readS8();
-            StringFragment marker = this->readString();
             StringFragment when = this->readString();
             int ctype = this->readS8();
             return Layout(flags, location, offset, binding, index, set, builtin,
                           inputAttachmentIndex, (Layout::Primitive)primitive, maxVertices,
-                          invocations, marker, when, (Layout::CType)ctype);
+                          invocations, when, (Layout::CType)ctype);
         }
         default:
             SkASSERT(false);
@@ -332,7 +331,7 @@ std::unique_ptr<ProgramElement> Rehydrator::element() {
         }
         case Rehydrator::kVarDeclarations_Command: {
             std::unique_ptr<Statement> decl = this->statement();
-            return std::make_unique<GlobalVarDeclaration>(/*offset=*/-1, std::move(decl));
+            return std::make_unique<GlobalVarDeclaration>(std::move(decl));
         }
         case Rehydrator::kStructDefinition_Command: {
             const Symbol* type = this->symbol();
@@ -565,7 +564,7 @@ std::unique_ptr<Expression> Rehydrator::expression() {
         case Rehydrator::kVariableReference_Command: {
             const Variable* var = this->symbolRef<Variable>(Symbol::Kind::kVariable);
             VariableReference::RefKind refKind = (VariableReference::RefKind) this->readU8();
-            return std::make_unique<VariableReference>(-1, var, refKind);
+            return VariableReference::Make(/*offset=*/-1, var, refKind);
         }
         case Rehydrator::kVoid_Command:
             return nullptr;

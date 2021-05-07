@@ -2053,8 +2053,7 @@ SpvId SPIRVCodeGenerator::writeVariableReference(const VariableReference& ref, O
                                          /*binding=*/-1, /*index=*/-1, /*set=*/-1, /*builtin=*/-1,
                                          /*inputAttachmentIndex=*/-1,
                                          Layout::kUnspecified_Primitive, /*maxVertices=*/1,
-                                         /*invocations=*/-1, /*marker=*/"", /*when=*/"",
-                                         Layout::CType::kDefault),
+                                         /*invocations=*/-1, /*when=*/"", Layout::CType::kDefault),
                                   /*flags=*/0),
                         SKSL_RTHEIGHT_NAME, fContext.fTypes.fFloat.get());
                 StringFragment name("sksl_synthetic_uniforms");
@@ -2074,7 +2073,7 @@ SpvId SPIRVCodeGenerator::writeVariableReference(const VariableReference& ref, O
                         Layout(flags, /*location=*/-1, /*offset=*/-1, binding, /*index=*/-1,
                                set, /*builtin=*/-1, /*inputAttachmentIndex=*/-1,
                                Layout::kUnspecified_Primitive,
-                               /*maxVertices=*/-1, /*invocations=*/-1, /*marker=*/"", /*when=*/"",
+                               /*maxVertices=*/-1, /*invocations=*/-1, /*when=*/"",
                                Layout::CType::kDefault),
                         Modifiers::kUniform_Flag);
                 const Variable* intfVar = fSynthetics.takeOwnershipOfSymbol(
@@ -3268,10 +3267,10 @@ void SPIRVCodeGenerator::writeDoStatement(const DoStatement& d, OutputStream& ou
         this->writeInstruction(SpvOpBranch, next, out);
     }
     this->writeLabel(next, out);
-    SpvId test = this->writeExpression(*d.test(), out);
-    this->writeInstruction(SpvOpBranchConditional, test, continueTarget, end, out);
+    this->writeInstruction(SpvOpBranch, continueTarget, out);
     this->writeLabel(continueTarget, out);
-    this->writeInstruction(SpvOpBranch, header, out);
+    SpvId test = this->writeExpression(*d.test(), out);
+    this->writeInstruction(SpvOpBranchConditional, test, header, end, out);
     this->writeLabel(end, out);
     fBreakTarget.pop();
     fContinueTarget.pop();
@@ -3420,8 +3419,22 @@ SPIRVCodeGenerator::EntrypointAdapter SPIRVCodeGenerator::writeEntrypointAdapter
                                     main.returnType().description() + "' from main()");
         return {};
     }
+    ExpressionArray args;
+    if (main.parameters().size() == 1) {
+        if (main.parameters()[0]->type() != *fContext.fTypes.fFloat2) {
+            fErrors.error(main.fOffset,
+                          "SPIR-V does not support parameter of type '" +
+                                  main.parameters()[0]->type().description() + "' to main()");
+            return {};
+        }
+        auto zero = std::make_unique<FloatLiteral>(
+                /*offset=*/-1, 0.0f, fContext.fTypes.fFloatLiteral.get());
+        auto zeros = std::make_unique<ConstructorSplat>(
+                /*offset=*/-1, *fContext.fTypes.fFloat2, std::move(zero));
+        args.push_back(std::move(zeros));
+    }
     auto callMainFn = std::make_unique<FunctionCall>(/*offset=*/-1, &main.returnType(), &main,
-                                                     /*arguments=*/ExpressionArray{});
+                                                     std::move(args));
 
     // Synthesize `skFragColor = main()` as a BinaryExpression.
     auto assignmentStmt = std::make_unique<ExpressionStatement>(std::make_unique<BinaryExpression>(
@@ -3521,8 +3534,7 @@ void SPIRVCodeGenerator::writeInstructions(const Program& program, OutputStream&
             SpvId id = this->writeInterfaceBlock(intf);
 
             const Modifiers& modifiers = intf.variable().modifiers();
-            if (((modifiers.fFlags & Modifiers::kIn_Flag) ||
-                 (modifiers.fFlags & Modifiers::kOut_Flag)) &&
+            if ((modifiers.fFlags & (Modifiers::kIn_Flag | Modifiers::kOut_Flag)) &&
                 modifiers.fLayout.fBuiltin == -1 &&
                 !is_dead(intf.variable(), fProgram.fUsage.get())) {
                 interfaceVars.insert(id);
@@ -3561,8 +3573,7 @@ void SPIRVCodeGenerator::writeInstructions(const Program& program, OutputStream&
     for (auto entry : fVariableMap) {
         const Variable* var = entry.first;
         if (var->storage() == Variable::Storage::kGlobal &&
-            ((var->modifiers().fFlags & Modifiers::kIn_Flag) ||
-             (var->modifiers().fFlags & Modifiers::kOut_Flag)) &&
+            (var->modifiers().fFlags & (Modifiers::kIn_Flag | Modifiers::kOut_Flag)) &&
             !is_dead(*var, fProgram.fUsage.get())) {
             interfaceVars.insert(entry.second);
         }

@@ -100,7 +100,6 @@ void Dehydrator::write(Layout l) {
         this->writeS8(l.fPrimitive);
         this->writeS8(l.fMaxVertices);
         this->writeS8(l.fInvocations);
-        this->write(l.fMarker);
         this->write(l.fWhen);
         this->writeS8((int) l.fCType);
     }
@@ -431,7 +430,6 @@ void Dehydrator::write(const Expression* e) {
             }
             case Expression::Kind::kFunctionReference:
             case Expression::Kind::kTypeReference:
-            case Expression::Kind::kDefined:
                 SkDEBUGFAIL("this expression shouldn't appear in finished code");
                 break;
         }

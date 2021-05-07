@@ -109,16 +109,16 @@ sk_sp<GrGpu> GrMtlGpu::Make(const GrMtlBackendContext& context, const GrContextO
     if (!context.fDevice || !context.fQueue) {
         return nullptr;
     }
-    if (@available(macOS 10.14, iOS 10.0, *)) {
+    if (@available(macOS 10.14, iOS 11.0, *)) {
         // no warning needed
     } else {
-        SkDebugf("*** Warning ***: this OS version is deprecated and will no longer be supported " \
-                 "in future releases.\n");
+        SkDebugf("*** Error ***: Skia's Metal backend no longer supports this OS version.\n");
 #ifdef SK_BUILD_FOR_IOS
-        SkDebugf("Minimum recommended version is iOS 10.0.\n");
+        SkDebugf("Minimum supported version is iOS 11.0.\n");
 #else
-        SkDebugf("Minimum recommended version is MacOS 10.14.\n");
+        SkDebugf("Minimum supported version is MacOS 10.14.\n");
 #endif
+        return nullptr;
     }
 
     id<MTLDevice> GR_NORETAIN device = (__bridge id<MTLDevice>)(context.fDevice.get());
@@ -204,14 +204,13 @@ void GrMtlGpu::destroyResources() {
 }
 
 GrOpsRenderPass* GrMtlGpu::onGetOpsRenderPass(
-            GrRenderTarget* renderTarget, bool useMultisampleFBO, GrAttachment*,
+            GrRenderTarget* renderTarget, bool /*useMSAASurface*/, GrAttachment*,
             GrSurfaceOrigin origin, const SkIRect& bounds,
             const GrOpsRenderPass::LoadAndStoreInfo& colorInfo,
             const GrOpsRenderPass::StencilLoadAndStoreInfo& stencilInfo,
             const SkTArray<GrSurfaceProxy*, true>& sampledProxies,
             GrXferBarrierFlags renderPassXferBarriers) {
-    return new GrMtlOpsRenderPass(this, renderTarget, useMultisampleFBO, origin, colorInfo,
-                                  stencilInfo);
+    return new GrMtlOpsRenderPass(this, renderTarget, origin, colorInfo, stencilInfo);
 }
 
 GrMtlCommandBuffer* GrMtlGpu::commandBuffer() {
@@ -533,18 +532,12 @@ bool GrMtlGpu::clearTexture(GrMtlTexture* tex, size_t bpp, uint32_t levelMask) {
     return true;
 }
 
-sk_sp<GrAttachment> GrMtlGpu::makeStencilAttachmentForRenderTarget(
-        const GrRenderTarget* rt, SkISize dimensions, int numStencilSamples) {
-    SkASSERT(numStencilSamples == rt->numSamples());
-    SkASSERT(dimensions.width() >= rt->width());
-    SkASSERT(dimensions.height() >= rt->height());
-
-    int samples = rt->numSamples();
-
+sk_sp<GrAttachment> GrMtlGpu::makeStencilAttachment(const GrBackendFormat& /*colorFormat*/,
+                                                    SkISize dimensions, int numStencilSamples) {
     MTLPixelFormat sFmt = this->mtlCaps().preferredStencilFormat();
 
     fStats.incStencilAttachmentCreates();
-    return GrMtlAttachment::GrMtlAttachment::MakeStencil(this, dimensions, samples, sFmt);
+    return GrMtlAttachment::GrMtlAttachment::MakeStencil(this, dimensions, numStencilSamples, sFmt);
 }
 
 sk_sp<GrTexture> GrMtlGpu::onCreateTexture(SkISize dimensions,

@@ -293,7 +293,8 @@ void IRGenerator::checkVarDeclaration(int offset, const Modifiers& modifiers, co
                                         "'key' is only permitted within fragment processors");
         }
     }
-    if (this->programKind() == ProgramKind::kRuntimeEffect) {
+    if (this->programKind() == ProgramKind::kRuntimeColorFilter ||
+        this->programKind() == ProgramKind::kRuntimeShader) {
         if (modifiers.fFlags & Modifiers::kIn_Flag) {
             this->errorReporter().error(offset, "'in' variables not permitted in runtime effects");
         }
@@ -306,22 +307,9 @@ void IRGenerator::checkVarDeclaration(int offset, const Modifiers& modifiers, co
         (modifiers.fFlags & Modifiers::kUniform_Flag)) {
         this->errorReporter().error(offset, "'key' is not permitted on 'uniform' variables");
     }
-    if (modifiers.fLayout.fMarker.fLength) {
-        if (this->programKind() != ProgramKind::kRuntimeEffect) {
-            this->errorReporter().error(offset,
-                                        "'marker' is only permitted in runtime effects");
-        }
-        if (!(modifiers.fFlags & Modifiers::kUniform_Flag)) {
-            this->errorReporter().error(offset,
-                                        "'marker' is only permitted on 'uniform' variables");
-        }
-        if (*baseType != *fContext.fTypes.fFloat4x4) {
-            this->errorReporter().error(offset,
-                                        "'marker' is only permitted on float4x4 variables");
-        }
-    }
     if (modifiers.fLayout.fFlags & Layout::kSRGBUnpremul_Flag) {
-        if (this->programKind() != ProgramKind::kRuntimeEffect) {
+        if (this->programKind() != ProgramKind::kRuntimeColorFilter &&
+            this->programKind() != ProgramKind::kRuntimeShader) {
             this->errorReporter().error(offset,
                                         "'srgb_unpremul' is only permitted in runtime effects");
         }
@@ -340,20 +328,10 @@ void IRGenerator::checkVarDeclaration(int offset, const Modifiers& modifiers, co
                                         "float3, or float4 variables");
         }
     }
-    if (modifiers.fFlags & Modifiers::kVarying_Flag) {
-        if (this->programKind() != ProgramKind::kRuntimeEffect) {
-            this->errorReporter().error(offset, "'varying' is only permitted in runtime effects");
-        }
-        if (!baseType->isFloat() &&
-            !(baseType->isVector() && baseType->componentType().isFloat())) {
-            this->errorReporter().error(offset, "'varying' must be float scalar or vector");
-        }
-    }
     int permitted = Modifiers::kConst_Flag;
     if (storage == Variable::Storage::kGlobal) {
         permitted |= Modifiers::kIn_Flag | Modifiers::kOut_Flag | Modifiers::kUniform_Flag |
-                     Modifiers::kFlat_Flag | Modifiers::kVarying_Flag |
-                     Modifiers::kNoPerspective_Flag;
+                     Modifiers::kFlat_Flag | Modifiers::kNoPerspective_Flag;
     }
     // TODO(skbug.com/11301): Migrate above checks into building a mask of permitted layout flags
     this->checkModifiers(offset, modifiers, permitted, /*permittedLayoutFlags=*/~0);
@@ -722,12 +700,12 @@ std::unique_ptr<Block> IRGenerator::applyInvocationIDWorkaround(std::unique_ptr<
     const Variable* loopIdx = &(*fSymbolTable)["sk_InvocationID"]->as<Variable>();
     auto test = BinaryExpression::Make(
             fContext,
-            std::make_unique<VariableReference>(/*offset=*/-1, loopIdx),
+            VariableReference::Make(/*offset=*/-1, loopIdx),
             Token::Kind::TK_LT,
             IntLiteral::Make(fContext, /*offset=*/-1, fInvocations));
     auto next = PostfixExpression::Make(
             fContext,
-            std::make_unique<VariableReference>(/*offset=*/-1, loopIdx,VariableRefKind::kReadWrite),
+            VariableReference::Make(/*offset=*/-1, loopIdx, VariableRefKind::kReadWrite),
             Token::Kind::TK_PLUSPLUS);
     ASTNode endPrimitiveID(&fFile->fNodes, -1, ASTNode::Kind::kIdentifier, "EndPrimitive");
     std::unique_ptr<Expression> endPrimitive = this->convertExpression(endPrimitiveID);
@@ -743,7 +721,7 @@ std::unique_ptr<Block> IRGenerator::applyInvocationIDWorkaround(std::unique_ptr<
                                                                       ExpressionArray{})));
     auto assignment = BinaryExpression::Make(
             fContext,
-            std::make_unique<VariableReference>(/*offset=*/-1, loopIdx, VariableRefKind::kWrite),
+            VariableReference::Make(/*offset=*/-1, loopIdx, VariableRefKind::kWrite),
             Token::Kind::TK_EQ,
             IntLiteral::Make(fContext, /*offset=*/-1, /*value=*/0));
     auto initializer = ExpressionStatement::Make(fContext, std::move(assignment));
@@ -770,12 +748,10 @@ std::unique_ptr<Statement> IRGenerator::getNormalizeSkPositionCode() {
     //                      sk_Position.w);
     SkASSERT(skPerVertex && fRTAdjust);
     auto Ref = [](const Variable* var) -> std::unique_ptr<Expression> {
-        return std::make_unique<VariableReference>(/*offset=*/-1, var,
-                                                   VariableReference::RefKind::kRead);
+        return VariableReference::Make(/*offset=*/-1, var, VariableReference::RefKind::kRead);
     };
     auto WRef = [](const Variable* var) -> std::unique_ptr<Expression> {
-        return std::make_unique<VariableReference>(/*offset=*/-1, var,
-                                                   VariableReference::RefKind::kWrite);
+        return VariableReference::Make(/*offset=*/-1, var, VariableReference::RefKind::kWrite);
     };
     auto Field = [&](const Variable* var, int idx) -> std::unique_ptr<Expression> {
         return FieldAccess::Make(fContext, Ref(var), idx,
@@ -840,7 +816,6 @@ void IRGenerator::checkModifiers(int offset,
     checkModifier(Modifiers::kFlat_Flag,           "flat");
     checkModifier(Modifiers::kNoPerspective_Flag,  "noperspective");
     checkModifier(Modifiers::kHasSideEffects_Flag, "sk_has_side_effects");
-    checkModifier(Modifiers::kVarying_Flag,        "varying");
     checkModifier(Modifiers::kInline_Flag,         "inline");
     checkModifier(Modifiers::kNoInline_Flag,       "noinline");
     SkASSERT(flags == 0);
@@ -873,7 +848,6 @@ void IRGenerator::checkModifiers(int offset,
     checkLayout(Layout::kPrimitive_Flag,                "primitive-type");
     checkLayout(Layout::kMaxVertices_Flag,              "max_vertices");
     checkLayout(Layout::kInvocations_Flag,              "invocations");
-    checkLayout(Layout::kMarker_Flag,                   "marker");
     checkLayout(Layout::kWhen_Flag,                     "when");
     checkLayout(Layout::kCType_Flag,                    "ctype");
     SkASSERT(layoutFlags == 0);
@@ -1025,6 +999,10 @@ void IRGenerator::convertFunction(const ASTNode& f) {
         this->errorReporter().error(f.fOffset, "functions cannot be both 'inline' and 'noinline'");
     }
 
+    auto typeIsValidForColor = [&](const Type& type) {
+        return type == *fContext.fTypes.fHalf4 || type == *fContext.fTypes.fFloat4;
+    };
+
     // Check modifiers on each function parameter.
     std::vector<const Variable*> parameters;
     for (size_t i = 0; i < funcData.fParameterCount; ++i) {
@@ -1056,12 +1034,24 @@ void IRGenerator::convertFunction(const ASTNode& f) {
         }
 
         Modifiers m = pd.fModifiers;
-        if (isMain && (this->programKind() == ProgramKind::kRuntimeEffect ||
+        if (isMain && (this->programKind() == ProgramKind::kRuntimeColorFilter ||
+                       this->programKind() == ProgramKind::kRuntimeShader ||
                        this->programKind() == ProgramKind::kFragmentProcessor)) {
-            if (i == 0) {
-                // We verify that the type is correct later, for now, if there is a parameter to
-                // a .fp or runtime-effect main(), it's supposed to be the coords:
+            // We verify that the signature is fully correct later. For now, if this is an .fp or
+            // runtime effect of any flavor, a float2 param is supposed to be the coords, and
+            // a half4/float parameter is supposed to be the input color:
+            if (*type == *fContext.fTypes.fFloat2) {
                 m.fLayout.fBuiltin = SK_MAIN_COORDS_BUILTIN;
+            } else if(typeIsValidForColor(*type)) {
+                m.fLayout.fBuiltin = SK_INPUT_COLOR_BUILTIN;
+            }
+        }
+        if (isMain && (this->programKind() == ProgramKind::kFragment)) {
+            // For testing purposes, we have .sksl inputs that are treated as both runtime effects
+            // and fragment shaders. To make that work, fragment shaders are allowed to have a
+            // coords parameter. We turn it into sk_FragCoord.
+            if (*type == *fContext.fTypes.fFloat2) {
+                m.fLayout.fBuiltin = SK_FRAGCOORD_BUILTIN;
             }
         }
 
@@ -1072,28 +1062,51 @@ void IRGenerator::convertFunction(const ASTNode& f) {
     }
 
     auto paramIsCoords = [&](int idx) {
-        return parameters[idx]->type() == *fContext.fTypes.fFloat2 &&
+        const Variable* p = parameters[idx];
+        return p->type() == *fContext.fTypes.fFloat2 &&
+               p->modifiers().fFlags == 0 &&
+               p->modifiers().fLayout.fBuiltin == (this->programKind() == ProgramKind::kFragment
+                                                           ? SK_FRAGCOORD_BUILTIN
+                                                           : SK_MAIN_COORDS_BUILTIN);
+    };
+
+    auto paramIsInputColor = [&](int idx) {
+        return typeIsValidForColor(parameters[idx]->type()) &&
                parameters[idx]->modifiers().fFlags == 0 &&
-               parameters[idx]->modifiers().fLayout.fBuiltin == SK_MAIN_COORDS_BUILTIN;
+               parameters[idx]->modifiers().fLayout.fBuiltin == SK_INPUT_COLOR_BUILTIN;
     };
 
     // Check the function signature of `main`.
     if (isMain) {
         switch (this->programKind()) {
-            case ProgramKind::kRuntimeEffect: {
-                // (half4|float4) main()  -or-  (half4|float4) main(float2)
-                if (*returnType != *fContext.fTypes.fHalf4 &&
-                    *returnType != *fContext.fTypes.fFloat4) {
+            case ProgramKind::kRuntimeColorFilter: {
+                // (half4|float4) main(half4|float4)
+                if (!typeIsValidForColor(*returnType)) {
                     this->errorReporter().error(f.fOffset,
                                                 "'main' must return: 'vec4', 'float4', or 'half4'");
                     return;
                 }
-                bool validParams = (parameters.size() == 0) ||
-                                   (parameters.size() == 1 && paramIsCoords(0));
+                bool validParams = (parameters.size() == 1 && paramIsInputColor(0));
                 if (!validParams) {
                     this->errorReporter().error(
-                            f.fOffset, "'main' parameters must be: (), (vec2), or (float2)");
+                            f.fOffset, "'main' parameter must be 'vec4', 'float4', or 'half4'");
                     return;
+                }
+                break;
+            }
+            case ProgramKind::kRuntimeShader: {
+                // (half4|float4) main(float2)  -or-  (half4|float4) main(float2, half4|float4)
+                if (!typeIsValidForColor(*returnType)) {
+                    this->errorReporter().error(f.fOffset,
+                                                "'main' must return: 'vec4', 'float4', or 'half4'");
+                    return;
+                }
+                bool validParams =
+                        (parameters.size() == 1 && paramIsCoords(0)) ||
+                        (parameters.size() == 2 && paramIsCoords(0) && paramIsInputColor(1));
+                if (!validParams) {
+                    this->errorReporter().error(
+                            f.fOffset, "'main' parameters must be (float2, (vec4|float4|half4)?)");
                 }
                 break;
             }
@@ -1112,8 +1125,20 @@ void IRGenerator::convertFunction(const ASTNode& f) {
                 break;
             }
             case ProgramKind::kGeneric:
+                // No rules apply here
                 break;
-            default:
+            case ProgramKind::kFragment: {
+                bool validParams = (parameters.size() == 0) ||
+                                   (parameters.size() == 1 && paramIsCoords(0));
+                if (!validParams) {
+                    this->errorReporter().error(f.fOffset,
+                                                "shader 'main' must be main() or main(float2)");
+                    return;
+                }
+                break;
+            }
+            case ProgramKind::kVertex:
+            case ProgramKind::kGeometry:
                 if (parameters.size()) {
                     this->errorReporter().error(f.fOffset,
                                                 "shader 'main' must have zero parameters");
@@ -1353,8 +1378,7 @@ void IRGenerator::convertGlobalVarDeclarations(const ASTNode& decl) {
                         std::make_unique<StructDefinition>(decl.fOffset, *type));
             }
         }
-        fProgramElements->push_back(std::make_unique<GlobalVarDeclaration>(decl.fOffset,
-                                                                           std::move(stmt)));
+        fProgramElements->push_back(std::make_unique<GlobalVarDeclaration>(std::move(stmt)));
     }
 }
 
@@ -1540,14 +1564,12 @@ std::unique_ptr<Expression> IRGenerator::convertIdentifier(int offset, StringFra
                 }
             }
             // default to kRead_RefKind; this will be corrected later if the variable is written to
-            return std::make_unique<VariableReference>(offset,
-                                                       var,
-                                                       VariableReference::RefKind::kRead);
+            return VariableReference::Make(offset, var, VariableReference::RefKind::kRead);
         }
         case Symbol::Kind::kField: {
             const Field* field = &result->as<Field>();
-            auto base = std::make_unique<VariableReference>(offset, &field->owner(),
-                                                            VariableReference::RefKind::kRead);
+            auto base = VariableReference::Make(offset, &field->owner(),
+                                                VariableReference::RefKind::kRead);
             return FieldAccess::Make(fContext, std::move(base), field->fieldIndex(),
                                      FieldAccess::OwnerKind::kAnonymousInterfaceBlock);
         }
@@ -2044,6 +2066,7 @@ void IRGenerator::findAndDeclareBuiltinVariables() {
     };
 
     BuiltinVariableScanner scanner(this);
+    SkASSERT(fProgramElements);
     for (auto& e : *fProgramElements) {
         scanner.visitProgramElement(*e);
     }
@@ -2073,6 +2096,8 @@ void IRGenerator::start(const ParsedModule& base,
                         const std::vector<std::unique_ptr<ExternalFunction>>* externalFunctions,
                         std::vector<std::unique_ptr<ProgramElement>>* elements,
                         std::vector<const ProgramElement*>* sharedElements) {
+    fProgramElements = elements;
+    fSharedElements = sharedElements;
     fSymbolTable = base.fSymbols;
     fIntrinsics = base.fIntrinsics.get();
     if (fIntrinsics) {
@@ -2102,8 +2127,7 @@ void IRGenerator::start(const ParsedModule& base,
         auto decl = VarDeclaration::Make(fContext, var.get(), fContext.fTypes.fInt.get(),
                                          /*arraySize=*/0, /*value=*/nullptr);
         fSymbolTable->add(std::move(var));
-        fProgramElements->push_back(
-                std::make_unique<GlobalVarDeclaration>(/*offset=*/-1, std::move(decl)));
+        fProgramElements->push_back(std::make_unique<GlobalVarDeclaration>(std::move(decl)));
     }
 
     if (externalFunctions) {
@@ -2161,9 +2185,6 @@ IRGenerator::IRBundle IRGenerator::convertProgram(
         const std::vector<std::unique_ptr<ExternalFunction>>* externalFunctions) {
     std::vector<std::unique_ptr<ProgramElement>> elements;
     std::vector<const ProgramElement*> sharedElements;
-
-    fProgramElements = &elements;
-    fSharedElements = &sharedElements;
 
     this->start(base, isBuiltinCode, externalFunctions, &elements, &sharedElements);
 

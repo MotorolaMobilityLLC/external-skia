@@ -162,6 +162,14 @@ DEF_GPUTEST_FOR_MOCK_CONTEXT(DSLFloat, r, ctxInfo) {
     EXPECT_EQUAL(Float4(0, 1, 2, 3),
                 "float4(0.0, 1.0, 2.0, 3.0)");
 
+    DSLVar x(kFloat_Type, "x");
+    EXPECT_EQUAL(x = 1.0, "(x = 1.0)");
+    EXPECT_EQUAL(x = 1.0f, "(x = 1.0)");
+
+    DSLVar y(kFloat2_Type, "y");
+    EXPECT_EQUAL(y.x() = 1.0, "(y.x = 1.0)");
+    EXPECT_EQUAL(y.x() = 1.0f, "(y.x = 1.0)");
+
     {
         ExpectError error(r, "error: floating point value is infinite\n");
         Float(std::numeric_limits<float>::infinity()).release();
@@ -1016,6 +1024,9 @@ DEF_GPUTEST_FOR_MOCK_CONTEXT(DSLBlock, r, ctxInfo) {
     Var a(kInt_Type, "a", 1), b(kInt_Type, "b", 2);
     Statement y = Block(Declare(a), Declare(b), a = b);
     EXPECT_EQUAL(y, "{ int a = 1; int b = 2; (a = b); }");
+
+    Statement z = (If(a > 0, --a), ++b);
+    EXPECT_EQUAL(z, "if ((a > 0)) --a; ++b;");
 }
 
 DEF_GPUTEST_FOR_MOCK_CONTEXT(DSLBreak, r, ctxInfo) {
@@ -1078,6 +1089,23 @@ DEF_GPUTEST_FOR_MOCK_CONTEXT(DSLDeclare, r, ctxInfo) {
         ExpectError error(r, "error: variable has already been declared\n");
         Declare(d).release();
     }
+
+    {
+        Var e(kUniform_Modifier, kInt_Type, "e");
+        ExpectError error(r, "error: this variable must be declared with DeclareGlobal\n");
+        Declare(e).release();
+    }
+}
+
+DEF_GPUTEST_FOR_MOCK_CONTEXT(DSLDeclareGlobal, r, ctxInfo) {
+    AutoDSLContext context(ctxInfo.directContext()->priv().getGpu(), /*markVarsDeclared=*/false);
+    Var x(kInt_Type, "x", 0);
+    DeclareGlobal(x);
+    Var y(kUniform_Modifier, kFloat2_Type, "y");
+    DeclareGlobal(y);
+    REPORTER_ASSERT(r, DSLWriter::ProgramElements().size() == 2);
+    EXPECT_EQUAL(*DSLWriter::ProgramElements()[0], "int x = 0;");
+    EXPECT_EQUAL(*DSLWriter::ProgramElements()[1], "uniform float2 y;");
 }
 
 DEF_GPUTEST_FOR_MOCK_CONTEXT(DSLDiscard, r, ctxInfo) {
@@ -1103,16 +1131,31 @@ DEF_GPUTEST_FOR_MOCK_CONTEXT(DSLDo, r, ctxInfo) {
 
 DEF_GPUTEST_FOR_MOCK_CONTEXT(DSLFor, r, ctxInfo) {
     AutoDSLContext context(ctxInfo.directContext()->priv().getGpu(), /*markVarsDeclared=*/false);
-    Statement x = For(Statement(), Expression(), Expression(), Block());
-    EXPECT_EQUAL(x, "for (;;) {}");
+    EXPECT_EQUAL(For(Statement(), Expression(), Expression(), Block()),
+                "for (;;) {}");
 
     Var i(kInt_Type, "i", 0);
-    Statement y = For(Declare(i), i < 10, ++i, i += 5);
-    EXPECT_EQUAL(y, "for (int i = 0; (i < 10); ++i) (i += 5);");
+    EXPECT_EQUAL(For(Declare(i), i < 10, ++i, i += 5),
+                "for (int i = 0; (i < 10); ++i) (i += 5);");
+
+    Var j(kInt_Type, "j", 0);
+    Var k(kInt_Type, "k", 10);
+    EXPECT_EQUAL(For((Declare(j), Declare(k)), j < k, ++j, Block()), R"(
+                 {
+                     int j = 0;
+                     int k = 10;
+                     for (; (j < k); ++j) {}
+                 }
+    )");
 
     {
         ExpectError error(r, "error: expected 'bool', but found 'int'\n");
         For(i = 0, i + 10, ++i, i += 5).release();
+    }
+
+    {
+        ExpectError error(r, "error: invalid for loop initializer\n");
+        For(If(i == 0, i = 1), i < 10, ++i, i += 5).release();
     }
 }
 
@@ -1246,6 +1289,9 @@ DEF_GPUTEST_FOR_MOCK_CONTEXT(DSLIf, r, ctxInfo) {
     Statement y = If(a > b, a -= b, b -= a);
     EXPECT_EQUAL(y, "if ((a > b)) (a -= b); else (b -= a);");
 
+    Statement z = StaticIf(a > b, a -= b, b -= a);
+    EXPECT_EQUAL(z, "@if ((a > b)) (a -= b); else (b -= a);");
+
     {
         ExpectError error(r, "error: expected 'bool', but found 'float'\n");
         If(a + b, a -= b).release();
@@ -1292,6 +1338,21 @@ DEF_GPUTEST_FOR_MOCK_CONTEXT(DSLSwitch, r, ctxInfo) {
     );
     EXPECT_EQUAL(x, R"(
         switch (b) {
+            case 0: (a = 0.0); break;
+            case 1: (a = 1.0); continue;
+            case 2: (a = 2.0);
+            default: discard;
+        }
+    )");
+
+    Statement y = StaticSwitch(b,
+        Case(0, a = 0, Break()),
+        Case(1, a = 1, Continue()),
+        Case(2, a = 2  /*Fallthrough*/),
+        Default(Discard())
+    );
+    EXPECT_EQUAL(y, R"(
+        @switch (b) {
             case 0: (a = 0.0); break;
             case 1: (a = 1.0); continue;
             case 2: (a = 2.0);
@@ -1354,6 +1415,21 @@ DEF_GPUTEST_FOR_MOCK_CONTEXT(DSLSwizzle, r, ctxInfo) {
                 "a.z");
 }
 
+
+DEF_GPUTEST_FOR_MOCK_CONTEXT(DSLVarSwap, r, ctxInfo) {
+    AutoDSLContext context(ctxInfo.directContext()->priv().getGpu(), /*markVarsDeclared=*/false);
+
+    // We should be able to convert `a` into a proper var by swapping it, even from within a scope.
+    Var a;
+    if (true)
+    {
+        Var(kInt_Type, "a").swap(a);
+    }
+
+    EXPECT_EQUAL(Statement(Block(Declare(a), a = 123)),
+                "{ int a; (a = 123); }");
+}
+
 DEF_GPUTEST_FOR_MOCK_CONTEXT(DSLWhile, r, ctxInfo) {
     AutoDSLContext context(ctxInfo.directContext()->priv().getGpu());
     Statement x = While(true, Block());
@@ -1402,6 +1478,8 @@ DEF_GPUTEST_FOR_MOCK_CONTEXT(DSLBuiltins, r, ctxInfo) {
     EXPECT_EQUAL(Abs(a),                 "abs(a)");
     EXPECT_EQUAL(All(b4),                "all(b4)");
     EXPECT_EQUAL(Any(b4),                "any(b4)");
+    EXPECT_EQUAL(Atan(a),                "atan(a)");
+    EXPECT_EQUAL(Atan(a, b),             "atan(a, b)");
     EXPECT_EQUAL(Ceil(a),                "ceil(a)");
     EXPECT_EQUAL(Clamp(a, 0, 1),         "clamp(a, 0.0, 1.0)");
     EXPECT_EQUAL(Cos(a),                 "cos(a)");
@@ -1489,24 +1567,34 @@ DEF_GPUTEST_FOR_MOCK_CONTEXT(DSLModifiers, r, ctxInfo) {
 
     Var v8(kUniform_Modifier, kInt_Type, "v8");
     REPORTER_ASSERT(r, DSLWriter::Var(v8).modifiers().fFlags == SkSL::Modifiers::kUniform_Flag);
+    DSLWriter::MarkDeclared(v8);
     // Uniforms do not need to be explicitly declared
 }
 
-DEF_GPUTEST_FOR_MOCK_CONTEXT(DSLSample, r, ctxInfo) {
+DEF_GPUTEST_FOR_MOCK_CONTEXT(DSLSampleFragmentProcessor, r, ctxInfo) {
     AutoDSLContext context(ctxInfo.directContext()->priv().getGpu(), /*markVarsDeclared=*/true,
                            SkSL::ProgramKind::kFragmentProcessor);
     DSLVar child(kUniform_Modifier, kFragmentProcessor_Type, "child");
     EXPECT_EQUAL(Sample(child), "sample(child)");
     EXPECT_EQUAL(Sample(child, Float2(0, 0)), "sample(child, float2(0.0, 0.0))");
-    EXPECT_EQUAL(Sample(child, Float3x3(1.0)), "sample(child, float3x3(1.0))");
     EXPECT_EQUAL(Sample(child, Half4(1)), "sample(child, half4(1.0))");
     EXPECT_EQUAL(Sample(child, Float2(0), Half4(1)), "sample(child, float2(0.0), half4(1.0))");
-    EXPECT_EQUAL(Sample(child, Float3x3(1.0), Half4(1)),
-                 "sample(child, float3x3(1.0), half4(1.0))");
 
     {
         ExpectError error(r, "error: no match for sample(fragmentProcessor, bool)\n");
         Sample(child, true).release();
+    }
+}
+
+DEF_GPUTEST_FOR_MOCK_CONTEXT(DSLSampleShader, r, ctxInfo) {
+    AutoDSLContext context(ctxInfo.directContext()->priv().getGpu(), /*markVarsDeclared=*/true,
+                           SkSL::ProgramKind::kRuntimeShader);
+    DSLVar shader(kUniform_Modifier, kShader_Type, "shader");
+    EXPECT_EQUAL(Sample(shader, Float2(0, 0)), "sample(shader, float2(0.0, 0.0))");
+
+    {
+        ExpectError error(r, "error: expected 'float2', but found 'half4'\n");
+        Sample(shader, Half4(1)).release();
     }
 }
 

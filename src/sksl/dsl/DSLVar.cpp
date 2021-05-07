@@ -9,6 +9,7 @@
 
 #include "include/sksl/DSLModifiers.h"
 #include "include/sksl/DSLType.h"
+#include "src/sksl/SkSLCompiler.h"
 #include "src/sksl/SkSLUtil.h"
 #include "src/sksl/dsl/priv/DSLWriter.h"
 #include "src/sksl/ir/SkSLBinaryExpression.h"
@@ -34,13 +35,22 @@ DSLVar::DSLVar(const char* name)
         // correctly-named variable with the right type, so we just create a placeholder for it.
         // TODO(skia/11330): we'll need to fix this when switching over to nodes.
         fVar = DSLWriter::SymbolTable()->takeOwnershipOfIRNode(
-                       std::make_unique<SkSL::Variable>(
-                                  /*offset=*/-1,
-                                  DSLWriter::IRGenerator().fModifiers->addToPool(SkSL::Modifiers()),
-                                  fName,
-                                  DSLWriter::Context().fTypes.fFloat2.get(),
-                                  /*builtin=*/true,
-                                  SkSL::VariableStorage::kGlobal));
+                std::make_unique<SkSL::Variable>(
+                        /*offset=*/-1,
+                        DSLWriter::IRGenerator().fModifiers->addToPool(
+                                SkSL::Modifiers(
+                                        SkSL::Layout(/*flags=*/0, /*location=*/-1, /*offset=*/-1,
+                                                     /*binding=*/-1, /*index=*/-1, /*set=*/-1,
+                                                     SK_MAIN_COORDS_BUILTIN,
+                                                     /*inputAttachmentIndex=*/-1,
+                                                     Layout::kUnspecified_Primitive,
+                                                     /*maxVertices=*/1, /*invocations=*/-1,
+                                                     /*when=*/"", Layout::CType::kDefault),
+                                        SkSL::Modifiers::kNo_Flag)),
+                        fName,
+                        DSLWriter::Context().fTypes.fFloat2.get(),
+                        /*builtin=*/true,
+                        SkSL::VariableStorage::kGlobal));
         return;
     }
 #endif
@@ -62,7 +72,7 @@ DSLVar::DSLVar(DSLModifiers modifiers, DSLType type, const char* name, DSLExpres
     : fModifiers(std::move(modifiers))
     , fType(std::move(type))
     , fRawName(name)
-    , fName(DSLWriter::Name(name))
+    , fName(fType.skslType().isOpaque() ? name : DSLWriter::Name(name))
     , fInitialValue(std::move(initialValue))
     , fStorage(Variable::Storage::kLocal)
     , fDeclared(DSLWriter::Instance().fMarkVarsDeclared) {
@@ -95,7 +105,6 @@ DSLVar::DSLVar(DSLModifiers modifiers, DSLType type, const char* name, DSLExpres
                                                                  &name).toIndex();
             fName = name;
         }
-        fDeclared = true;
     }
 #endif // SK_SUPPORT_GPU && !defined(SKSL_STANDALONE)
 }
@@ -105,6 +114,19 @@ DSLVar::~DSLVar() {
         DSLWriter::ReportError(String::printf("error: variable '%s' was destroyed without being "
                                               "declared\n", fRawName).c_str());
     }
+}
+
+void DSLVar::swap(DSLVar& other) {
+    std::swap(fModifiers, other.fModifiers);
+    std::swap(fType, other.fType);
+    std::swap(fUniformHandle, other.fUniformHandle);
+    std::swap(fDeclaration, other.fDeclaration);
+    std::swap(fVar, other.fVar);
+    std::swap(fRawName, other.fRawName);
+    std::swap(fName, other.fName);
+    std::swap(fInitialValue.fExpression, other.fInitialValue.fExpression);
+    std::swap(fStorage, other.fStorage);
+    std::swap(fDeclared, other.fDeclared);
 }
 
 DSLPossibleExpression DSLVar::operator[](DSLExpression&& index) {

@@ -27,14 +27,14 @@
 
 GrD3DOpsRenderPass::GrD3DOpsRenderPass(GrD3DGpu* gpu) : fGpu(gpu) {}
 
-bool GrD3DOpsRenderPass::set(GrRenderTarget* rt, bool useMSAASurface, GrSurfaceOrigin origin,
-                             const SkIRect& bounds, const GrOpsRenderPass::LoadAndStoreInfo&
-                             colorInfo, const GrOpsRenderPass::StencilLoadAndStoreInfo& stencilInfo,
+bool GrD3DOpsRenderPass::set(GrRenderTarget* rt, GrSurfaceOrigin origin, const SkIRect& bounds,
+                             const GrOpsRenderPass::LoadAndStoreInfo& colorInfo,
+                             const GrOpsRenderPass::StencilLoadAndStoreInfo& stencilInfo,
                              const SkTArray<GrSurfaceProxy*, true>& sampledProxies) {
     SkASSERT(!fRenderTarget);
     SkASSERT(fGpu == rt->getContext()->priv().getGpu());
 
-    this->INHERITED::set(rt, useMSAASurface, origin);
+    this->INHERITED::set(rt, origin);
 
     fBounds = bounds;
 
@@ -175,8 +175,9 @@ bool GrD3DOpsRenderPass::onBindPipeline(const GrProgramInfo& info, const SkRect&
         fCurrentPipelineBounds.setEmpty();
     }
 
+    GrD3DRenderTarget* d3dRT = static_cast<GrD3DRenderTarget*>(fRenderTarget);
     fCurrentPipelineState =
-            fGpu->resourceProvider().findOrCreateCompatiblePipelineState(fRenderTarget, info);
+            fGpu->resourceProvider().findOrCreateCompatiblePipelineState(d3dRT, info);
     if (!fCurrentPipelineState) {
         return false;
     }

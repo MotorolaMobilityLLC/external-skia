@@ -277,26 +277,15 @@ void HCodeGenerator::writeConstructor() {
             ++samplerCount;
         } else if (paramType.isFragmentProcessor()) {
             SampleUsage usage = Analysis::GetSampleUsage(fProgram, *param);
+            std::string usageArg = usage.constructor();
 
-            std::string perspExpression;
-            if (usage.hasUniformMatrix()) {
-                for (const Variable* p : fSectionAndParameterHelper.getParameters()) {
-                    if ((p->modifiers().fFlags & Modifiers::kIn_Flag) &&
-                        usage.fExpression == String(p->name())) {
-                        perspExpression = usage.fExpression + ".hasPerspective()";
-                        break;
-                    }
-                }
-            }
-            std::string usageArg = usage.constructor(std::move(perspExpression));
-
-            this->writef("        this->registerChild(std::move(%s), %s);",
+            this->writef("        this->registerChild(std::move(%s), %s);\n",
                          String(param->name()).c_str(),
                          usageArg.c_str());
         }
     }
     if (samplerCount) {
-        this->writef("        this->setTextureSamplerCnt(%d);", samplerCount);
+        this->writef("        this->setTextureSamplerCnt(%d);\n", samplerCount);
     }
     this->writef("    }\n");
 }
