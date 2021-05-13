@@ -146,6 +146,7 @@ cc_defaults {
 
         x86: {
             srcs: [
+                "src/codec/SkJpegCodec.cpp",
                 "src/opts/SkOpts_avx.cpp",
                 "src/opts/SkOpts_hsw.cpp",
                 "src/opts/SkOpts_skx.cpp",
@@ -157,6 +158,7 @@ cc_defaults {
 
         x86_64: {
             srcs: [
+                "src/codec/SkJpegCodec.cpp",
                 "src/opts/SkOpts_avx.cpp",
                 "src/opts/SkOpts_hsw.cpp",
                 "src/opts/SkOpts_skx.cpp",
