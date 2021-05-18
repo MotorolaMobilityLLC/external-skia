@@ -139,15 +139,6 @@ bool GrDrawingManager::flush(
 
     this->sortTasks();
 
-    bool usingReorderedDAG = false;
-    GrResourceAllocator resourceAllocator(dContext);
-    if (fReduceOpsTaskSplitting) {
-        usingReorderedDAG = this->reorderTasks(&resourceAllocator);
-        if (!usingReorderedDAG) {
-            resourceAllocator.reset();
-        }
-    }
-
     if (!fCpuBufferCache) {
         // We cache more buffers when the backend is using client side arrays. Otherwise, we
         // expect each pool will use a CPU buffer as a staging buffer before uploading to a GPU
@@ -170,7 +161,7 @@ bool GrDrawingManager::flush(
         }
 
         for (GrOnFlushCallbackObject* onFlushCBObject : fOnFlushCBObjects) {
-            onFlushCBObject->preFlush(&onFlushProvider, fFlushingRenderTaskIDs);
+            onFlushCBObject->preFlush(&onFlushProvider, SkMakeSpan(fFlushingRenderTaskIDs));
         }
         for (const auto& onFlushRenderTask : fOnFlushRenderTasks) {
             onFlushRenderTask->makeClosed(*fContext->priv().caps());
@@ -192,6 +183,15 @@ bool GrDrawingManager::flush(
             });
 #endif
             onFlushRenderTask->prepare(&flushState);
+        }
+    }
+
+    bool usingReorderedDAG = false;
+    GrResourceAllocator resourceAllocator(dContext);
+    if (fReduceOpsTaskSplitting) {
+        usingReorderedDAG = this->reorderTasks(&resourceAllocator);
+        if (!usingReorderedDAG) {
+            resourceAllocator.reset();
         }
     }
 
@@ -229,7 +229,8 @@ bool GrDrawingManager::flush(
         flushed = false;
     }
     for (GrOnFlushCallbackObject* onFlushCBObject : fOnFlushCBObjects) {
-        onFlushCBObject->postFlush(fTokenTracker.nextTokenToFlush(), fFlushingRenderTaskIDs);
+        onFlushCBObject->postFlush(fTokenTracker.nextTokenToFlush(),
+                                   SkMakeSpan(fFlushingRenderTaskIDs));
         flushed = true;
     }
     if (flushed) {
@@ -391,7 +392,7 @@ static void reorder_array_by_llist(const SkTInternalLList<T>& llist, SkTArray<sk
 bool GrDrawingManager::reorderTasks(GrResourceAllocator* resourceAllocator) {
     SkASSERT(fReduceOpsTaskSplitting);
     SkTInternalLList<GrRenderTask> llist;
-    bool clustered = GrClusterRenderTasks(fDAG, &llist);
+    bool clustered = GrClusterRenderTasks(SkMakeSpan(fDAG), &llist);
     if (!clustered) {
         return false;
     }

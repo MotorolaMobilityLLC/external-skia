@@ -78,7 +78,12 @@ public:
      */
     void addDependenciesFromOtherTask(GrRenderTask* otherTask);
 
-    SkSpan<GrRenderTask*> dependencies() { return SkSpan<GrRenderTask*>(fDependencies); }
+    SkSpan<GrRenderTask*> dependencies() { return SkMakeSpan(fDependencies); }
+    SkSpan<GrRenderTask*> dependents() { return SkMakeSpan(fDependents); }
+
+    void replaceDependency(const GrRenderTask* toReplace, GrRenderTask* replaceWith);
+    void replaceDependent(const GrRenderTask* toReplace, GrRenderTask* replaceWith);
+
 
     /*
      * Does this renderTask depend on 'dependedOn'?

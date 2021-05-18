@@ -83,14 +83,16 @@ using RefKind = VariableReference::RefKind;
 class AutoSource {
 public:
     AutoSource(Compiler* compiler, const String* source)
-            : fCompiler(compiler), fOldSource(fCompiler->fSource) {
+            : fCompiler(compiler) {
+        SkASSERT(!fCompiler->fSource);
         fCompiler->fSource = source;
     }
 
-    ~AutoSource() { fCompiler->fSource = fOldSource; }
+    ~AutoSource() {
+        fCompiler->fSource = nullptr;
+    }
 
     Compiler* fCompiler;
-    const String* fOldSource;
 };
 
 class AutoProgramConfig {
@@ -108,10 +110,24 @@ public:
     Context* fContext;
 };
 
+class AutoModifiersPool {
+public:
+    AutoModifiersPool(std::shared_ptr<Context>& context, ModifiersPool* modifiersPool)
+            : fContext(context.get()) {
+        SkASSERT(!fContext->fModifiersPool);
+        fContext->fModifiersPool = modifiersPool;
+    }
+
+    ~AutoModifiersPool() {
+        fContext->fModifiersPool = nullptr;
+    }
+
+    Context* fContext;
+};
+
 Compiler::Compiler(const ShaderCapsClass* caps)
         : fContext(std::make_shared<Context>(/*errors=*/*this, *caps))
-        , fInliner(fContext.get())
-        , fErrorCount(0) {
+        , fInliner(fContext.get()) {
     SkASSERT(caps);
     fRootSymbolTable = std::make_shared<SymbolTable>(this, /*builtin=*/true);
     fPrivateSymbolTable = std::make_shared<SymbolTable>(fRootSymbolTable, /*builtin=*/true);
@@ -143,11 +159,9 @@ Compiler::Compiler(const ShaderCapsClass* caps)
         TYPE(  UInt), TYPE(  UInt2), TYPE(  UInt3), TYPE(  UInt4),
         TYPE( Short), TYPE( Short2), TYPE( Short3), TYPE( Short4),
         TYPE(UShort), TYPE(UShort2), TYPE(UShort3), TYPE(UShort4),
-        TYPE(  Byte), TYPE(  Byte2), TYPE(  Byte3), TYPE(  Byte4),
-        TYPE( UByte), TYPE( UByte2), TYPE( UByte3), TYPE( UByte4),
 
         TYPE(GenUType), TYPE(UVec),
-        TYPE(SVec), TYPE(USVec), TYPE(ByteVec), TYPE(UByteVec),
+        TYPE(SVec), TYPE(USVec),
 
         TYPE(Float2x3), TYPE(Float2x4),
         TYPE(Float3x2), TYPE(Float3x4),
@@ -183,13 +197,12 @@ Compiler::Compiler(const ShaderCapsClass* caps)
 
     // sk_Caps is "builtin", but all references to it are resolved to Settings, so we don't need to
     // treat it as builtin (ie, no need to clone it into the Program).
-    fPrivateSymbolTable->add(
-            std::make_unique<Variable>(/*offset=*/-1,
-                                       fIRGenerator->fModifiers->addToPool(Modifiers()),
-                                       "sk_Caps",
-                                       fContext->fTypes.fSkCaps.get(),
-                                       /*builtin=*/false,
-                                       Variable::Storage::kGlobal));
+    fPrivateSymbolTable->add(std::make_unique<Variable>(/*offset=*/-1,
+                                                        fCoreModifiers.add(Modifiers{}),
+                                                        "sk_Caps",
+                                                        fContext->fTypes.fSkCaps.get(),
+                                                        /*builtin=*/false,
+                                                        Variable::Storage::kGlobal));
 
     fRootModule = {fRootSymbolTable, /*fIntrinsics=*/nullptr};
     fPrivateModule = {fPrivateSymbolTable, /*fIntrinsics=*/nullptr};
@@ -309,6 +322,9 @@ LoadedModule Compiler::loadModule(ProgramKind kind,
     }
     SkASSERT(base);
 
+    // Put the core-module modifier pool into the context.
+    AutoModifiersPool autoPool(fContext, &fCoreModifiers);
+
     // Built-in modules always use default program settings.
     ProgramConfig config;
     config.fKind = kind;
@@ -326,27 +342,20 @@ LoadedModule Compiler::loadModule(ProgramKind kind,
     const String* source = fRootSymbolTable->takeOwnershipOfString(std::move(text));
     AutoSource as(this, source);
 
-    SkASSERT(fIRGenerator->fCanInline);
-    fIRGenerator->fCanInline = false;
-
     ParsedModule baseModule = {base, /*fIntrinsics=*/nullptr};
     IRGenerator::IRBundle ir = fIRGenerator->convertProgram(baseModule, /*isBuiltinCode=*/true,
                                                             source->c_str(), source->length(),
                                                             /*externalFunctions=*/nullptr);
     SkASSERT(ir.fSharedElements.empty());
     LoadedModule module = { kind, std::move(ir.fSymbolTable), std::move(ir.fElements) };
-    fIRGenerator->fCanInline = true;
     if (this->fErrorCount) {
         printf("Unexpected errors: %s\n", this->fErrorText.c_str());
         SkDEBUGFAILF("%s %s\n", data.fPath, this->fErrorText.c_str());
     }
-    fModifiers.push_back(std::move(ir.fModifiers));
 #else
     SkASSERT(data.fData && (data.fSize != 0));
-    Rehydrator rehydrator(fContext.get(), fIRGenerator->fModifiers.get(), base, this,
-                          data.fData, data.fSize);
+    Rehydrator rehydrator(fContext.get(), base, data.fData, data.fSize);
     LoadedModule module = { kind, rehydrator.symbolTable(), rehydrator.elements() };
-    fModifiers.push_back(fIRGenerator->releaseModifiers());
 #endif
 
     return module;
@@ -359,7 +368,7 @@ ParsedModule Compiler::parseModule(ProgramKind kind, ModuleData data, const Pars
     // For modules that just declare (but don't define) intrinsic functions, there will be no new
     // program elements. In that case, we can share our parent's intrinsic map:
     if (module.fElements.empty()) {
-        return {module.fSymbols, base.fIntrinsics};
+        return ParsedModule{module.fSymbols, base.fIntrinsics};
     }
 
     auto intrinsics = std::make_shared<IRIntrinsicMap>(base.fIntrinsics.get());
@@ -404,7 +413,7 @@ ParsedModule Compiler::parseModule(ProgramKind kind, ModuleData data, const Pars
         }
     }
 
-    return {module.fSymbols, std::move(intrinsics)};
+    return ParsedModule{module.fSymbols, std::move(intrinsics)};
 }
 
 std::unique_ptr<Program> Compiler::convertProgram(
@@ -419,6 +428,10 @@ std::unique_ptr<Program> Compiler::convertProgram(
     // Loading and optimizing our base module might reset the inliner, so do that first,
     // *then* configure the inliner with the settings for this program.
     const ParsedModule& baseModule = this->moduleForProgramKind(kind);
+
+    // Put a fresh modifier pool into the context.
+    auto modifiersPool = std::make_unique<ModifiersPool>();
+    AutoModifiersPool autoPool(fContext, modifiersPool.get());
 
     // Update our context to point to the program configuration for the duration of compilation.
     auto config = std::make_unique<ProgramConfig>(ProgramConfig{kind, settings});
@@ -456,11 +469,10 @@ std::unique_ptr<Program> Compiler::convertProgram(
 
     fErrorText = "";
     fErrorCount = 0;
-    fInliner.reset(fIRGenerator->fModifiers.get());
+    fInliner.reset();
 
-    // Not using AutoSource, because caller is likely to call errorText() if we fail to compile
-    std::unique_ptr<String> textPtr(new String(std::move(text)));
-    fSource = textPtr.get();
+    auto textPtr = std::make_unique<String>(std::move(text));
+    AutoSource as(this, textPtr.get());
 
     // Enable node pooling while converting and optimizing the program for a performance boost.
     // The Program will take ownership of the pool.
@@ -477,7 +489,7 @@ std::unique_ptr<Program> Compiler::convertProgram(
                                              fContext,
                                              std::move(ir.fElements),
                                              std::move(ir.fSharedElements),
-                                             std::move(ir.fModifiers),
+                                             std::move(modifiersPool),
                                              std::move(ir.fSymbolTable),
                                              std::move(pool),
                                              ir.fInputs);
@@ -557,7 +569,7 @@ bool Compiler::optimize(LoadedModule& module) {
     AutoProgramConfig autoConfig(fContext, &config);
 
     // Reset the Inliner.
-    fInliner.reset(fModifiers.back().get());
+    fInliner.reset();
 
     std::unique_ptr<ProgramUsage> usage = Analysis::GetUsage(module);
 
@@ -748,9 +760,9 @@ bool Compiler::optimize(Program& program) {
 
 bool Compiler::toSPIRV(Program& program, OutputStream& out) {
     TRACE_EVENT0("skia.shaders", "SkSL::Compiler::toSPIRV");
+    AutoSource as(this, program.fSource.get());
 #ifdef SK_ENABLE_SPIRV_VALIDATION
     StringStream buffer;
-    AutoSource as(this, program.fSource.get());
     SPIRVCodeGenerator cg(fContext.get(), &program, this, &buffer);
     bool result = cg.generateCode();
     if (result && program.fConfig->fSettings.fValidateSPIRV) {
@@ -784,7 +796,6 @@ bool Compiler::toSPIRV(Program& program, OutputStream& out) {
         out.write(data.c_str(), data.size());
     }
 #else
-    AutoSource as(this, program.fSource.get());
     SPIRVCodeGenerator cg(fContext.get(), &program, this, &out);
     bool result = cg.generateCode();
 #endif
@@ -828,6 +839,7 @@ bool Compiler::toHLSL(Program& program, String* out) {
 
 bool Compiler::toMetal(Program& program, OutputStream& out) {
     TRACE_EVENT0("skia.shaders", "SkSL::Compiler::toMetal");
+    AutoSource as(this, program.fSource.get());
     MetalCodeGenerator cg(fContext.get(), &program, this, &out);
     bool result = cg.generateCode();
     return result;

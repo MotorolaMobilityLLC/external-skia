@@ -650,8 +650,13 @@ export interface LineMetrics {
     lineNumber: number;
 }
 
+export interface Range {
+    first: number;
+    last:  number;
+}
+
 /**
- * Information for a run of shaped text. See Paragraph.getShapedRuns()
+ * Information for a run of shaped text. See Paragraph.getShapedLines()
  *
  * Notes:
  * positions is documented as Float32, but it holds twice as many as you expect, and they
@@ -661,10 +666,38 @@ export interface LineMetrics {
  * to describe the location "after" the last glyph in the glyphs array.
  */
 export interface GlyphRun {
+    typeface: Typeface;     // currently set to null (temporary)
+    size: number;
+    fakeBold: Boolean;
+    fakeItalic: Boolean;
+
     glyphs: Uint16Array;
     positions: Float32Array;    // alternating x0, y0, x1, y1, ...
     offsets: Uint32Array;
     flags: number;              // see GlyphRunFlags
+}
+
+/**
+ * Information for a paragraph of text. See Paragraph.getShapedLines()
+ */
+ export interface ShapedLine {
+    textRange: Range;   // first and last character offsets for the line (derived from runs[])
+    top: number;        // top y-coordinate for the line
+    bottom: number;     // bottom y-coordinate for the line
+    baseline: number;   // baseline y-coordinate for the line
+    runs: GlyphRun[];   // array of GlyphRun objects for the line
+}
+
+/**
+ * Input to ShapeText(..., FontBlock[], ...);
+ */
+export interface FontBlock {
+    length: number;     // number of text codepoints this block is applied to
+
+    typeface: Typeface;
+    size: number;
+    fakeBold: Boolean;
+    fakeItalic: Boolean;
 }
 
 /**
@@ -824,7 +857,10 @@ export interface Paragraph extends EmbindObject<Paragraph> {
      */
     getWordBoundary(offset: number): URange;
 
-    getShapedRuns(): GlyphRun[];
+    /**
+     * Returns an array of ShapedLine objects, describing the paragraph.
+     */
+    getShapedLines(): ShapedLine[];
 
     /**
      * Lays out the text in the paragraph so it is wrapped to the given width.
@@ -1639,6 +1675,11 @@ export interface Font extends EmbindObject<Font> {
     getSkewX(): number;
 
     /**
+     * Returns embolden effect for this font. Default value is false.
+     */
+    isEmbolden(): boolean;
+
+     /**
      * Returns the Typeface set for this font.
      */
     getTypeface(): Typeface | null;
@@ -1687,6 +1728,12 @@ export interface Font extends EmbindObject<Font> {
      * @param sx
      */
     setSkewX(sx: number): void;
+
+    /**
+     * Set embolden effect for this font.
+     * @param embolden
+     */
+    setEmbolden(embolden: boolean): void;
 
     /**
      * Requests, but does not require, that glyphs respect sub-pixel positioning.
@@ -2992,6 +3039,11 @@ export interface ParagraphBuilderFactory {
      * @param fontSrc
      */
     MakeFromFontProvider(style: ParagraphStyle, fontSrc: TypefaceFontProvider): ParagraphBuilder;
+
+    /**
+     * Return a shaped array of lines
+     */
+    ShapeText(text: string, runs: FontBlock[], width?: number): ShapedLine[];
 }
 
 export interface ParagraphStyleConstructor {

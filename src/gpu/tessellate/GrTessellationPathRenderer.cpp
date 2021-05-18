@@ -15,12 +15,12 @@
 #include "src/gpu/GrRecordingContextPriv.h"
 #include "src/gpu/GrSurfaceDrawContext.h"
 #include "src/gpu/geometry/GrStyledShape.h"
+#include "src/gpu/geometry/GrWangsFormula.h"
 #include "src/gpu/ops/GrFillRectOp.h"
 #include "src/gpu/tessellate/GrDrawAtlasPathOp.h"
 #include "src/gpu/tessellate/GrPathInnerTriangulateOp.h"
+#include "src/gpu/tessellate/GrPathStencilFillOp.h"
 #include "src/gpu/tessellate/GrStrokeTessellateOp.h"
-#include "src/gpu/tessellate/GrTessellatingStencilFillOp.h"
-#include "src/gpu/tessellate/GrWangsFormula.h"
 
 constexpr static SkISize kAtlasInitialSize{512, 512};
 constexpr static int kMaxAtlasSize = 2048;
@@ -134,7 +134,7 @@ GrPathRenderer::CanDrawPath GrTessellationPathRenderer::onCanDrawPath(
         shape.style().strokeRec().getStyle() == SkStrokeRec::kStrokeAndFill_Style ||
         shape.inverseFilled() ||
         args.fHasUserStencilSettings ||
-        args.fTargetIsWrappedVkSecondaryCB) {
+        !args.fProxy->canUseStencil(*args.fCaps)) {
         return CanDrawPath::kNo;
     }
     // On platforms that don't have native support for indirect draws and/or hardware tessellation,
@@ -239,8 +239,8 @@ static GrOp::Owner make_op(GrRecordingContext* rContext, const GrSurfaceContext*
                                                             std::move(paint), aaType, opFlags);
             }
         }
-        return GrOp::Make<GrTessellatingStencilFillOp>(rContext, viewMatrix, path, std::move(paint),
-                                                       aaType, opFlags);
+        return GrOp::Make<GrPathStencilFillOp>(rContext, viewMatrix, path, std::move(paint), aaType,
+                                               opFlags);
     }
 }
 
@@ -410,8 +410,9 @@ void GrTessellationPathRenderer::renderAtlas(GrOnFlushResourceProvider* onFlushR
             }
             uberPath->setFillType(fillType);
             GrAAType aaType = (antialias) ? GrAAType::kMSAA : GrAAType::kNone;
-            auto op = GrOp::Make<GrTessellatingStencilFillOp>(onFlushRP->recordingContext(),
-                    SkMatrix::I(), *uberPath, GrPaint(), aaType, fStencilAtlasFlags);
+            auto op = GrOp::Make<GrPathStencilFillOp>(onFlushRP->recordingContext(), SkMatrix::I(),
+                                                      *uberPath, GrPaint(), aaType,
+                                                      fStencilAtlasFlags);
             rtc->addDrawOp(nullptr, std::move(op));
         }
     }

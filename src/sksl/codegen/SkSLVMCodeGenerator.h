@@ -8,8 +8,8 @@
 #ifndef SKSL_VMGENERATOR
 #define SKSL_VMGENERATOR
 
+#include "include/core/SkSpan.h"
 #include "include/private/SkSLString.h"
-#include "src/core/SkSpan.h"
 #include "src/core/SkVM.h"
 #include "src/sksl/ir/SkSLType.h"
 
@@ -20,10 +20,7 @@ namespace SkSL {
 class FunctionDefinition;
 struct Program;
 
-using SampleChildFn = std::function<skvm::Color(int, skvm::Coord)>;
-
-// TODO: Have a generic entry point, supporting SkSpan<skvm::Val> for parameters and return values.
-// That would be useful for interpreter use cases like SkParticleEffect.
+using SampleChildFn = std::function<skvm::Color(int, skvm::Coord, skvm::Color)>;
 
 // Convert 'function' to skvm instructions in 'builder', for use by shaders and color filters
 skvm::Color ProgramToSkVM(const Program& program,

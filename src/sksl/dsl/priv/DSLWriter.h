@@ -44,7 +44,7 @@ class ErrorHandler;
  */
 class DSLWriter {
 public:
-    DSLWriter(SkSL::Compiler* compiler, SkSL::ProgramKind kind);
+    DSLWriter(SkSL::Compiler* compiler, SkSL::ProgramKind kind, int flags);
 
     ~DSLWriter();
 
@@ -83,12 +83,17 @@ public:
      * Returns the final pointer to a pooled Modifiers object that should be used to represent the
      * given modifiers.
      */
-    static const SkSL::Modifiers* Modifiers(SkSL::Modifiers modifiers);
+    static const SkSL::Modifiers* Modifiers(const SkSL::Modifiers& modifiers);
 
     /**
-     * Returns the SkSL variable corresponding to a DSLVar.
+     * Returns the SkSL variable corresponding to a (non-parameter) DSLVar.
      */
     static const SkSL::Variable& Var(DSLVar& var);
+
+    /**
+     * Creates an SkSL variable corresponding to a parameter DSLVar.
+     */
+    static std::unique_ptr<SkSL::Variable> ParameterVar(DSLVar& var);
 
     /**
      * Returns the SkSL declaration corresponding to a DSLVar.
@@ -151,6 +156,12 @@ public:
                                                   ExpressionArray arguments);
 
     /**
+     * Invokes expr(arguments), where expr is a function or type reference.
+     */
+    static std::unique_ptr<SkSL::Expression> Call(std::unique_ptr<SkSL::Expression> expr,
+                                                  ExpressionArray arguments);
+
+    /**
      * Reports an error if the argument is null. Returns its argument unmodified.
      */
     static std::unique_ptr<SkSL::Expression> Check(std::unique_ptr<SkSL::Expression> expr);
@@ -209,9 +220,11 @@ public:
 
 private:
     std::unique_ptr<SkSL::ProgramConfig> fConfig;
+    std::unique_ptr<SkSL::ModifiersPool> fModifiersPool;
     SkSL::Compiler* fCompiler;
     std::unique_ptr<Pool> fPool;
     SkSL::ProgramConfig* fOldConfig;
+    SkSL::ModifiersPool* fOldModifiersPool;
     std::vector<std::unique_ptr<SkSL::ProgramElement>> fProgramElements;
     std::vector<const SkSL::ProgramElement*> fSharedElements;
     ErrorHandler* fErrorHandler = nullptr;
@@ -229,7 +242,6 @@ private:
 
     friend class DSLCore;
     friend class DSLVar;
-    friend class ::AutoDSLContext;
 };
 
 } // namespace dsl
