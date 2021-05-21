@@ -77,7 +77,7 @@ static void initialize_info(jpeg_decompress_struct_ALPHA* cinfo, skjpeg_source_m
     jpeg_save_markers_ALPHA(cinfo, kICCMarker, 0xFFFF);
     cinfo->src = src_mgr;
 #ifdef MTK_JPEG_SW_OPTIMIZATION
-    char value[PROPERTY_VALUE_MAX];
+    char value[PROPERTY_VALUE_MAX] = "0";
     int mOptOn, mOptSwitch;
     property_get("ro.vendor.jpeg_decode_sw_opt", value, "0");
     mOptOn = atoi(value);
@@ -655,7 +655,6 @@ static bool getEncodedColor(jpeg_decompress_struct_ALPHA* cinfo, SkEncodedInfo::
             return false;
     }
 }
-extern int Buf_getMva(int ionClientHnd,  BufferAllocator *bufferAllocator, unsigned int size, unsigned int *mva, int handle);
 extern int Buf_flush(int ionClientHnd,  BufferAllocator *bufferAllocator, unsigned int size, void* bufAddr, ion_user_handle_t handle, int bufferFD);
 
 bool SkJPEGImageDecoder::onBuildTileIndex(SkStreamRewindable* stream, int *width, int *height) {
@@ -716,10 +715,8 @@ bool SkJPEGImageDecoder::onBuildTileIndex(SkStreamRewindable* stream, int *width
 
     if (Buf_flush(fIonClientHnd, fBufferAllocator, length, fBitstreamBuf->getAddr(), handle, fBitstreamBuf->getFD()))
         SkDebugf("onBuildTileIndex Buf_flush failed");
-    if (Buf_getMva(fIonClientHnd, fBufferAllocator, length, &pa, handle))
-        SkDebugf("onBuildTileIndex Buf_getMva failed");
 
-    cinfo->src->next_input_byte_pa = (const JOCTET_ALPHA*) (unsigned long) pa;
+    cinfo->src->next_input_byte_pa = (const JOCTET_ALPHA*) (unsigned long) fBitstreamBuf->getFD();
     cinfo->src->bytes_in_buffer_pa = length;
     cinfo->src->buffer_size = fBitstreamBuf->getSize() - 2048;
 
@@ -769,7 +766,7 @@ bool SkJPEGImageDecoder::onBuildTileIndex(SkStreamRewindable* stream, int *width
     }
 
 #ifdef MTK_JPEG_DEBUG_DUMP_INOUT
-    char value[PROPERTY_VALUE_MAX];
+    char value[PROPERTY_VALUE_MAX] = "0";
     int mDumpIn;
     FILE *fp = nullptr;
     unsigned char* cptr;
@@ -996,7 +993,7 @@ bool SkJPEGImageDecoder::onDecodeSubset(SkBitmap* bm, BRDAllocator* allocator, c
     if (fFirstTileDone == false)
     {
         long u4PQOpt;
-        char value[PROPERTY_VALUE_MAX];
+        char value[PROPERTY_VALUE_MAX] = "0";
 
         property_get("jpegRegion.forceEnable.PQ", value, "-1");
         u4PQOpt = atol(value);
@@ -1160,7 +1157,7 @@ bool SkJPEGImageDecoder::onDecodeSubset(SkBitmap* bm, BRDAllocator* allocator, c
     uint8_t* srcRow = (uint8_t*)srcStorage.reset(width * srcBytesPerPixel);
 
 #ifdef MTK_JPEG_DEBUG_DUMP_INOUT
-    char value[PROPERTY_VALUE_MAX];
+    char value[PROPERTY_VALUE_MAX] = "0";
     int mDumpOut;
     FILE *fp = nullptr;
     unsigned char* cptr;

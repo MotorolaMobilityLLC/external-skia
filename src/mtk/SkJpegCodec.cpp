@@ -130,36 +130,6 @@ void* allocateBuffer(int ionClientHnd, BufferAllocator *bufferAllocator, ion_use
     return bufAddr;
 }
 
-int Buf_getMva(int ionClientHnd, BufferAllocator *bufferAllocator, unsigned int size, unsigned int *mva, int handle)
-{
-    int ion_user_handle;
-    int ret = 0;
-
-    if (ionClientHnd <= 0)
-    {
-        // TODO: call to kernel to get mva
-        return 0;
-    }
-
-    /* use get_iova replace config_buffer & get_phys*/
-    struct ion_mm_data mm_data;
-    memset((void*)&mm_data, 0, sizeof(mm_data));
-    mm_data.get_phys_param.handle = handle;
-    mm_data.mm_cmd = ION_MM_GET_IOVA;
-    mm_data.get_phys_param.module_id = 236; // jpgdec_bsdma_0
-    mm_data.get_phys_param.len = size;
-
-    ret = ion_custom_ioctl(ionClientHnd, ION_CMD_MULTIMEDIA, &mm_data);
-    if (ret < 0) {
-        SkCodecPrintf("ion get phys fail\n");
-        return ret;
-    }
-    *mva = mm_data.get_phys_param.phy_addr;
-    SkCodecPrintf("size %d,phy_addr 0x%llx", size, mm_data.get_phys_param.phy_addr);
-
-    return 0;
-}
-
 int Buf_flush(int ionClientHnd, BufferAllocator *bufferAllocator, unsigned int size, void* bufAddr, ion_user_handle_t handle, int bufferFD)
 {
     struct ion_sys_data sys_data;
@@ -508,7 +478,7 @@ bool ImgPostProc(void* src, int ionClientHnd, BufferAllocator *bufferAllocator, 
 #define MIN_WIDTH_APPLY_OPT 256 // image width need >= 256 when applying opt.
 #define MIN_SIZE_APPLY_OPT 1000000 // No need to apply opt. when image resolution smaller than 1M
 
-bool LoadInputStreamToMem(int IonClientHnd, BufferAllocator *bufferAllocator, SkBufMalloc *allocMemory, SkStream* stream, SkStream **mstream, unsigned int *pa)
+bool LoadInputStreamToMem(int IonClientHnd, BufferAllocator *bufferAllocator, SkBufMalloc *allocMemory, SkStream* stream, SkStream **mstream)
 {
     int handle;
     size_t curStreamPosition = stream->getPosition();
@@ -575,9 +545,7 @@ bool LoadInputStreamToMem(int IonClientHnd, BufferAllocator *bufferAllocator, Sk
         handle = allocMemory->getIonAllocHnd();
         if (Buf_flush(IonClientHnd, bufferAllocator, length, allocMemory->getAddr(), handle, allocMemory->getFD()))
             SkCodecPrintf("LoadInputStreamToMem Buf_flush failed");
-        if (Buf_getMva(IonClientHnd, bufferAllocator, length, pa, handle))
-            SkCodecPrintf("LoadInputStreamToMem Buf_getMva failed");
-        SkCodecPrintf("LoadInputStreamToMem va %p pa 0x%x  size %u", allocMemory->getAddr(), *pa, allocMemory->getSize());
+        SkCodecPrintf("LoadInputStreamToMem va %p  size %zu", allocMemory->getAddr(), allocMemory->getSize());
         return true;
     }
     else
@@ -857,6 +825,7 @@ SkJpegCodec::SkJpegCodec(SkEncodedInfo&& info, std::unique_ptr<SkStream> stream,
     }
     else
     {
+        fBufferAllocator = nullptr;
         fIonClientHnd = ion_open();
         if (fIonClientHnd < 0)
         {
@@ -1246,7 +1215,7 @@ int SkJpegCodec::readRows_MTK(const SkImageInfo& dstInfo, void* dst, size_t rowB
     }
 
 #ifdef MTK_JPEG_DEBUG_DUMP_INOUT
-    char value[PROPERTY_VALUE_MAX];
+    char value[PROPERTY_VALUE_MAX] = "0";
     int mDumpOut;
     FILE *fp = nullptr;
     unsigned char* cptr;
@@ -1448,7 +1417,7 @@ SkCodec::Result SkJpegCodec::onGetPixels(const SkImageInfo& dstInfo,
     fSwizzlerSubset.setEmpty(); // reset fSwizzlerSubset
 
 #ifdef MTK_JPEG_SW_OPTIMIZATION
-    char value[PROPERTY_VALUE_MAX];
+    char value[PROPERTY_VALUE_MAX] = "0";
     int mOptOn, mOptSwitch;
     property_get("ro.vendor.jpeg_decode_sw_opt", value, "0");
     mOptOn = atoi(value);
@@ -1456,10 +1425,9 @@ SkCodec::Result SkJpegCodec::onGetPixels(const SkImageInfo& dstInfo,
     mOptSwitch = atoi(value);
     int inwidth = this->getInfo().width();
     int inheight = this->getInfo().height();
-    unsigned int pa;
 
     if (mOptOn > 0 && mOptSwitch == 1 && inwidth >= MIN_WIDTH_APPLY_OPT && inwidth * inheight >= MIN_SIZE_APPLY_OPT &&
-        LoadInputStreamToMem(fIonClientHnd, fBufferAllocator, fBitstreamBuf, this->stream(), &fMemStream, &pa)) {
+        LoadInputStreamToMem(fIonClientHnd, fBufferAllocator, fBitstreamBuf, this->stream(), &fMemStream)) {
         std::unique_ptr<JpegDecoderMgr_MTK> decoderMgr(new JpegDecoderMgr_MTK(fMemStream));
         skjpeg_error_mgr_MTK::AutoPushJmpBuf jmp(decoderMgr->errorMgr_MTK());
         if (setjmp(jmp)) {
@@ -1470,7 +1438,7 @@ SkCodec::Result SkJpegCodec::onGetPixels(const SkImageInfo& dstInfo,
         decoderMgr->oal_MTK()->queryHAL = Codec_queryHAL;
         decoderMgr->init_MTK();
         decoderMgr->dinfo_MTK()->multithread_decode = true; // Enable SW full image opt.
-        decoderMgr->dinfo_MTK()->src->next_input_byte_pa = (const JOCTET_ALPHA*) (unsigned long) pa;
+        decoderMgr->dinfo_MTK()->src->next_input_byte_pa = (const JOCTET_ALPHA*) (unsigned long) fBitstreamBuf->getFD();
         decoderMgr->dinfo_MTK()->src->bytes_in_buffer_pa = fMemStream->getLength();
         decoderMgr->dinfo_MTK()->src->buffer_size = fBitstreamBuf->getSize() - 2048;
 
@@ -1560,7 +1528,7 @@ SkCodec::Result SkJpegCodec::onGetPixels(const SkImageInfo& dstInfo,
     if (fFirstTileDone == false)
     {
         long u4PQOpt;
-        char value[PROPERTY_VALUE_MAX];
+        char value[PROPERTY_VALUE_MAX] = "0";
 
         // property control for PQ flag
         property_get("jpegDecode.forceEnable.PQ", value, "-1");
@@ -1741,7 +1709,7 @@ SkSampler* SkJpegCodec::getSampler(bool createIfNecessary) {
 SkCodec::Result SkJpegCodec::onStartScanlineDecode(const SkImageInfo& dstInfo,
         const Options& options) {
 #ifdef MTK_JPEG_SW_OPTIMIZATION
-    char value[PROPERTY_VALUE_MAX];
+    char value[PROPERTY_VALUE_MAX] = "0";
     int mOptOn, mOptSwitch;
     property_get("ro.vendor.jpeg_decode_sw_opt", value, "0");
     mOptOn = atoi(value);
@@ -1749,10 +1717,9 @@ SkCodec::Result SkJpegCodec::onStartScanlineDecode(const SkImageInfo& dstInfo,
     mOptSwitch = atoi(value);
     int inwidth = this->getInfo().width();
     int inheight = this->getInfo().height();
-    unsigned int pa;
 
     if (!options.fSubset && mOptOn > 0 && mOptSwitch == 1 && inwidth >= MIN_WIDTH_APPLY_OPT && inwidth * inheight >= MIN_SIZE_APPLY_OPT &&
-        LoadInputStreamToMem(fIonClientHnd, fBufferAllocator, fBitstreamBuf, this->stream(), &fMemStream, &pa)) {
+        LoadInputStreamToMem(fIonClientHnd, fBufferAllocator, fBitstreamBuf, this->stream(), &fMemStream)) {
         std::unique_ptr<JpegDecoderMgr_MTK> decoderMgr(new JpegDecoderMgr_MTK(fMemStream));
         skjpeg_error_mgr_MTK::AutoPushJmpBuf jmp(decoderMgr->errorMgr_MTK());
         if (setjmp(jmp)) {
@@ -1763,7 +1730,7 @@ SkCodec::Result SkJpegCodec::onStartScanlineDecode(const SkImageInfo& dstInfo,
         decoderMgr->oal_MTK()->queryHAL = Codec_queryHAL;
         decoderMgr->init_MTK();
         decoderMgr->dinfo_MTK()->multithread_decode = true; // Enable SW full image opt.
-        decoderMgr->dinfo_MTK()->src->next_input_byte_pa = (const JOCTET_ALPHA*) (unsigned long) pa;
+        decoderMgr->dinfo_MTK()->src->next_input_byte_pa = (const JOCTET_ALPHA*) (unsigned long) fBitstreamBuf->getFD();
         decoderMgr->dinfo_MTK()->src->bytes_in_buffer_pa = fMemStream->getLength();
         decoderMgr->dinfo_MTK()->src->buffer_size = fBitstreamBuf->getSize() - 2048;
 
@@ -1804,7 +1771,7 @@ SkCodec::Result SkJpegCodec::onStartScanlineDecode(const SkImageInfo& dstInfo,
     if (fFirstTileDone == false)
     {
         long u4PQOpt;
-        char value[PROPERTY_VALUE_MAX];
+        char value[PROPERTY_VALUE_MAX] = "0";
 
         // property control for PQ flag
         property_get("jpegDecode.forceEnable.PQ", value, "-1");
