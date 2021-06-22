@@ -445,7 +445,7 @@ bool ImgPostProc(void* src, int ionClientHnd, BufferAllocator *bufferAllocator, 
         mdpParam.dst_profile = MMS_PROFILE_ENUM::MMS_PROFILE_JPEG;
 
         auto ret = IMms_service->BlitStreamFD(mdpParam);
-        if (!ret.isOk() || ret < 0)
+        if (!ret.isOk())
         {
             SkCodecPrintf("IMms_service->BlitStreamFD failed");
             if (dstBuffer != NULL)

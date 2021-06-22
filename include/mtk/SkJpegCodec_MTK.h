@@ -34,7 +34,7 @@ public:
     {
     }
 
-    ~SkBufMalloc()
+    ~SkBufMalloc() noexcept(false)
     {
         free();
     }
