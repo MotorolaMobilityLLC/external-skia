@@ -7,11 +7,6 @@ import (
 )
 
 func mtkJpegEnhanceSkiaDefaults(ctx android.LoadHookContext) {
-        vars := ctx.Config().VendorConfig("mtkPlugin")
-        sysBaseProject := vars.String("SYS_BASE_PROJECT")
-        if sysBaseProject == "" {
-                return
-        }
 	type props struct {
 		Target struct {
 			Android struct {
