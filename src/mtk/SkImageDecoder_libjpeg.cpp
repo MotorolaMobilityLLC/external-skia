@@ -1335,7 +1335,7 @@ if(!fFirstTileDone || fUseHWResizer)
 
         if (!skip_src_rows_tile(cinfo, fImageIndex->huffmanIndex(), srcRow,
                                 sampler.srcDY() - 1)) {
-            return return_false(*cinfo, bitmap, "skip rows");
+            break;
         }
     }
 
