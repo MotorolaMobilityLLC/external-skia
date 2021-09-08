@@ -7,6 +7,11 @@ import (
 )
 
 func mtkJpegEnhanceSkiaDefaults(ctx android.LoadHookContext) {
+	vars := ctx.Config().VendorConfig("mtkPlugin")
+	targetArch := vars.String("TARGET_ARCH")
+	if targetArch == "x86" || targetArch == "x86_64" {
+		return
+	}
 	type props struct {
 		Target struct {
 			Android struct {

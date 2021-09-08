@@ -146,7 +146,6 @@ cc_defaults {
 
         x86: {
             srcs: [
-                "src/codec/SkJpegCodec.cpp",
                 "src/opts/SkOpts_avx.cpp",
                 "src/opts/SkOpts_hsw.cpp",
                 "src/opts/SkOpts_skx.cpp",
@@ -158,7 +157,6 @@ cc_defaults {
 
         x86_64: {
             srcs: [
-                "src/codec/SkJpegCodec.cpp",
                 "src/opts/SkOpts_avx.cpp",
                 "src/opts/SkOpts_hsw.cpp",
                 "src/opts/SkOpts_skx.cpp",
@@ -1806,6 +1804,19 @@ cc_library_static {
           "win",
         ],
       },
+    },
+
+    arch: {
+        x86: {
+            srcs: [
+                "src/codec/SkJpegCodec.cpp",
+            ],
+        },
+        x86_64: {
+            srcs: [
+                "src/codec/SkJpegCodec.cpp",
+            ],
+        },
     },
 
     defaults: ["mtk_jpeg_enhance_skia_defaults",
