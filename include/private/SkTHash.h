@@ -234,6 +234,12 @@ private:
     }
 
     T* uncheckedSet(T&& val) {
+        //ignore invalid val
+        if((T *)&val == 0){
+            SkDebugf("ignore val 0 in uncheckedSet");
+            return nullptr;
+        }
+
         const K& key = Traits::GetKey(val);
         SkASSERT(key == key);
         uint32_t hash = Hash(key);
