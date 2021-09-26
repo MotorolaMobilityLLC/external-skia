@@ -99,6 +99,10 @@ public:
 
 private:
     struct Traits {
+        static bool isValid(const Entry* e){
+            return (e == 0) ? false : true;
+        }
+
         static const K& GetKey(Entry* e) {
             return e->fKey;
         }

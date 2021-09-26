@@ -204,6 +204,9 @@ private:
     Strike* fHead SK_GUARDED_BY(fLock) {nullptr};
     Strike* fTail SK_GUARDED_BY(fLock) {nullptr};
     struct StrikeTraits {
+        static bool isValid(const sk_sp<Strike>& strike){
+            return (strike == 0) ? false : true;
+        }
         static const SkDescriptor& GetKey(const sk_sp<Strike>& strike) {
             return strike->getDescriptor();
         }

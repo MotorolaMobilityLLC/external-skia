@@ -65,6 +65,9 @@ void SkResourceCache::Key::init(void* nameSpace, uint64_t sharedID, size_t dataS
 
 namespace {
     struct HashTraits {
+        static bool isValid(const SkResourceCache::Rec* rec){
+            return true;
+        }
         static uint32_t Hash(const SkResourceCache::Key& key) { return key.hash(); }
         static const SkResourceCache::Key& GetKey(const SkResourceCache::Rec* rec) {
             return rec->getKey();

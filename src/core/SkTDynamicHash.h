@@ -49,6 +49,9 @@ public:
 
 private:
     struct AdaptedTraits {
+        static bool isValid(T* entry){
+            return (entry == 0) ? false : true;
+        }
         static const Key& GetKey(T* entry) { return Traits::GetKey(*entry); }
         static uint32_t Hash(const Key& key) { return Traits::Hash(key); }
     };

@@ -235,7 +235,7 @@ private:
 
     T* uncheckedSet(T&& val) {
         //ignore invalid val
-        if((T *)&val == 0){
+        if(Traits::isValid(val) == false){
             SkDebugf("ignore val 0 in uncheckedSet");
             return nullptr;
         }
@@ -402,6 +402,7 @@ public:
     // Dereferencing an iterator gives back a key-value pair, suitable for structured binding.
     struct Pair : public std::pair<K, V> {
         using std::pair<K, V>::pair;
+        static bool isValid(const Pair& p){ return true;}
         static const K& GetKey(const Pair& p) { return p.first; }
         static auto Hash(const K& key) { return HashK()(key); }
     };
@@ -460,6 +461,9 @@ public:
 
 private:
     struct Traits {
+        static bool isValid(const T& item){
+            return true;
+        }
         static const T& GetKey(const T& item) { return item; }
         static auto Hash(const T& item) { return HashT()(item); }
     };

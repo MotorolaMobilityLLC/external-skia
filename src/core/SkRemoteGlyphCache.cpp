@@ -297,6 +297,9 @@ private:
     };
 
     struct MaskSummaryTraits {
+        static bool isValid(MaskSummary summary){
+            return true;
+        }
         static SkPackedGlyphID GetKey(MaskSummary summary) {
             return SkPackedGlyphID{summary.packedID};
         }
@@ -316,6 +319,10 @@ private:
     };
 
     struct PathSummaryTraits {
+        static bool isValid(PathSummary summary){
+            return true;
+        }
+
         static SkGlyphID GetKey(PathSummary summary) {
             return summary.glyphID;
         }

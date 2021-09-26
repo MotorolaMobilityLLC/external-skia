@@ -267,6 +267,9 @@ DEF_TEST(HashFindOrNull, r) {
     };
 
     struct HashTraits {
+        static bool isValid(const Entry* e){
+            return (e == 0) ? false : true;
+        }
         static int GetKey(const Entry* e) { return e->key; }
         static uint32_t Hash(int key) { return key; }
     };

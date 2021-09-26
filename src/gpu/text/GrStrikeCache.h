@@ -33,6 +33,10 @@ public:
 
 private:
     struct HashTraits {
+        static bool isValid(const GrGlyph* glyph){
+            return (glyph == 0) ? false : true;
+        }
+
         // GetKey and Hash for the the hash table.
         static const SkPackedGlyphID& GetKey(const GrGlyph* glyph) {
             return glyph->fPackedID;
@@ -78,6 +82,9 @@ private:
     }
 
     struct DescriptorHashTraits {
+        static bool isValid(const sk_sp<GrTextStrike>& strike){
+            return (strike == 0) ? false : true;
+        }
         static const SkDescriptor& GetKey(const sk_sp<GrTextStrike>& strike) {
             return *strike->fFontScalerKey.getDesc();
         }
