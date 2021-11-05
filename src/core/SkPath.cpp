@@ -3462,6 +3462,13 @@ bool SkPathPriv::IsRectContour(const SkPath& path, bool allowPartial, int* currV
                 if (SkPath::kClose_Verb != verb) {
                     lastPt = pts;
                 }
+
+                //just for debug to dump path info
+                if((SkPath::kClose_Verb == verb) && (firstPt == nullptr)){
+                    SkDebugf("print path dump for crash issue:");
+                    path.dump();
+                }
+
                 SkPoint lineEnd = SkPath::kClose_Verb == verb ? *firstPt : *pts++;
                 SkVector lineDelta = lineEnd - lineStart;
                 if (lineDelta.fX && lineDelta.fY) {
