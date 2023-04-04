@@ -369,7 +369,10 @@ void GrGLCheckErr(const GrGLInterface* gl,
         if (gLogCallsGL)                                        \
             SkDebugf(GR_FILE_AND_LINE_STR "GL: " #X "\n")
 #else
-    #define GR_GL_LOG_CALLS_IMPL(X)
+    extern bool gHWUICallsGL;
+    #define GR_GL_LOG_CALLS_IMPL(X)                             \
+        if (gHWUICallsGL)                                        \
+            SkDebugf(GR_FILE_AND_LINE_STR "GL: " #X "\n")
 #endif
 
 // makes a GL call on the interface and does any error checking and logging
