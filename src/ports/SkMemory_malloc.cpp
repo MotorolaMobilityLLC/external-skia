@@ -38,8 +38,18 @@ static inline void sk_out_of_memory(size_t size) {
 
 static inline void* throw_on_failure(size_t size, void* p) {
     if (size > 0 && p == nullptr) {
+        /**
+         * Unisoc: Solve sk_out_of_memory
+         * Bug: 2315355
+         * method: modify directly
+         * AOSP Code @{
         // If we've got a nullptr here, the only reason we should have failed is running out of RAM.
         sk_out_of_memory(size);
+         @}
+         * Unisoc Code @{
+         */
+        return nullptr;
+        /* @} */
     }
     return p;
 }
