@@ -1731,12 +1731,13 @@ skgpu::Swizzle GrVkCaps::onGetReadSwizzle(const GrBackendFormat& format,
     SkAssertResult(format.asVkFormat(&vkFormat));
     const auto* ycbcrInfo = format.getVkYcbcrConversionInfo();
     SkASSERT(ycbcrInfo);
-    if (ycbcrInfo->isValid() && ycbcrInfo->fExternalFormat != 0) {
-        // We allow these to work with any color type and never swizzle. See
-        // onAreColorTypeAndFormatCompatible.
-        return skgpu::Swizzle{"rgba"};
+    if (ycbcrInfo) {
+        if (ycbcrInfo->isValid() && ycbcrInfo->fExternalFormat != 0) {
+           // We allow these to work with any color type and never swizzle. See
+           // onAreColorTypeAndFormatCompatible.
+           return skgpu::Swizzle{"rgba"};
+        }
     }
-
     const auto& info = this->getFormatInfo(vkFormat);
     for (int i = 0; i < info.fColorTypeInfoCount; ++i) {
         const auto& ctInfo = info.fColorTypeInfos[i];
